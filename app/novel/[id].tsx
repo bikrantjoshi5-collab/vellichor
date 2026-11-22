@@ -142,7 +142,17 @@ export default function NovelDetailScreen() {
     );
   }
 
-  const nextUnread = chapters.find((c) => c.is_read === 0) ?? chapters[0] ?? null;
+  // Smartly resume the exact in-progress chapter (or most recently opened chapter), else start next unread
+  const resumeChapter =
+    chapters.find((c) => c.read_progress_pct > 0 && c.read_progress_pct < 92) ??
+    chapters.find((c) => c.is_read === 0) ??
+    chapters[0] ??
+    null;
+
+  const resumeLabel =
+    resumeChapter && resumeChapter.read_progress_pct > 0 && resumeChapter.read_progress_pct < 92
+      ? `Resume · ${Math.round(resumeChapter.read_progress_pct)}%`
+      : 'Read';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -191,12 +201,12 @@ export default function NovelDetailScreen() {
                       await refreshLibrary();
                     }}
                   />
-                  {nextUnread ? (
+                  {resumeChapter ? (
                     <Button
-                      title="Read"
+                      title={resumeLabel}
                       size="sm"
                       onPress={() =>
-                        router.push({ pathname: '/reader/[chapterId]', params: { chapterId: String(nextUnread.id) } })
+                        router.push({ pathname: '/reader/[chapterId]', params: { chapterId: String(resumeChapter.id) } })
                       }
                     />
                   ) : null}

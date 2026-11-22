@@ -12,6 +12,7 @@ import {
 } from '@/theme';
 import type { ReaderPrefs } from '@/store/appStore';
 import {
+  pickDefaultNaturalVoice,
   rankAndLabelVoices,
   TTS_PITCH_PRESETS,
   TTS_SPEED_PRESETS,
@@ -49,11 +50,16 @@ export function ReaderSettingsSheet({
       .then((list) => {
         const ranked = rankAndLabelVoices(list, {
           includeAllLanguages: showAllVoices,
-          maxCount: showAllVoices ? 30 : 14,
+          maxCount: showAllVoices ? 40 : 28,
         });
         setVoices(ranked);
+        const preferred = pickDefaultNaturalVoice(ranked, prefs.ttsVoice);
+        if (preferred && preferred.identifier !== prefs.ttsVoice) {
+          onUpdatePrefs({ ttsVoice: preferred.identifier });
+        }
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, showAllVoices]);
 
   const previewVoice = (voiceId?: string) => {
@@ -182,39 +188,6 @@ export function ReaderSettingsSheet({
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.voiceCardsRow}
                 >
-                  <Pressable
-                    onPress={() => {
-                      onUpdatePrefs({ ttsVoice: undefined });
-                      previewVoice(undefined);
-                    }}
-                    style={({ pressed }) => [
-                      styles.voiceCard,
-                      !prefs.ttsVoice && styles.voiceCardActive,
-                      pressed && { transform: [{ scale: motion.pressScale }] },
-                    ]}
-                  >
-                    <View style={styles.voiceTop}>
-                      <ThemedText
-                        variant="cardTitle"
-                        style={{ color: !prefs.ttsVoice ? mossColors.accentFg : mossColors.fg }}
-                        numberOfLines={1}
-                      >
-                        System Best
-                      </ThemedText>
-                      <Volume2
-                        size={14}
-                        color={!prefs.ttsVoice ? mossColors.accentFg : mossColors.muted}
-                        strokeWidth={1.9}
-                      />
-                    </View>
-                    <ThemedText
-                      variant="caption"
-                      style={{ color: !prefs.ttsVoice ? mossColors.accentFg : mossColors.muted }}
-                    >
-                      Auto · Tap to preview
-                    </ThemedText>
-                  </Pressable>
-
                   {voices.map((v) => {
                     const selected = prefs.ttsVoice === v.identifier;
                     return (

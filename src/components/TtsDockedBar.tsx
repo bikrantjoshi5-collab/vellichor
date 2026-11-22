@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { Pause, Play, SkipBack, SkipForward, X } from 'lucide-react-native';
+import { ListStart, Pause, Play, SkipBack, SkipForward, X } from 'lucide-react-native';
 import { motion, radius, spacing, type ReaderSurfacePalette } from '@/theme';
 import { ThemedText } from './ThemedText';
 
@@ -9,6 +9,8 @@ export interface TtsDockedBarProps {
   playing: boolean;
   rate: number;
   paragraphLabel: string;
+  pickingParagraph?: boolean;
+  onTogglePickParagraph?: () => void;
   onTogglePlay: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -21,6 +23,8 @@ export function TtsDockedBar({
   playing,
   rate,
   paragraphLabel,
+  pickingParagraph = false,
+  onTogglePickParagraph,
   onTogglePlay,
   onPrev,
   onNext,
@@ -59,7 +63,7 @@ export function TtsDockedBar({
 
         <View style={styles.meta}>
           <ThemedText variant="cardTitle" style={{ color: palette.fg }} numberOfLines={1}>
-            {playing ? 'Reading aloud' : 'Voice paused'}
+            {pickingParagraph ? 'Tap a paragraph…' : playing ? 'Reading aloud' : 'Voice paused'}
           </ThemedText>
           <ThemedText variant="caption" style={{ color: palette.muted }} numberOfLines={1}>
             {paragraphLabel}
@@ -68,6 +72,26 @@ export function TtsDockedBar({
       </View>
 
       <View style={styles.controls}>
+        {onTogglePickParagraph ? (
+          <Pressable
+            testID="tts-pick-paragraph"
+            accessibilityRole="button"
+            accessibilityLabel="Pick starting paragraph"
+            onPress={onTogglePickParagraph}
+            hitSlop={6}
+            style={[
+              styles.iconBtn,
+              pickingParagraph && { backgroundColor: palette.accent },
+            ]}
+          >
+            <ListStart
+              size={16}
+              color={pickingParagraph ? palette.accentFg : palette.fg}
+              strokeWidth={1.9}
+            />
+          </Pressable>
+        ) : null}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Previous paragraph"
@@ -123,12 +147,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.smd,
     borderTopWidth: 1,
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   left: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.smd,
+    gap: spacing.sm,
     flex: 1,
   },
   playBtn: {
@@ -144,19 +168,20 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: 2,
   },
   iconBtn: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     borderRadius: radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rateChip: {
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.sm - 1,
     paddingVertical: spacing.xs + 1,
     borderRadius: radius.sm,
     borderWidth: 1,
+    marginHorizontal: 2,
   },
 });

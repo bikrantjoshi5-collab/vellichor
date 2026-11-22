@@ -110,6 +110,27 @@ export class TtsController {
     this.speakAt(target);
   }
 
+  /**
+   * Jumps voice narration to a specific user-chosen paragraph.
+   * Automatically enables TTS if needed and begins speaking immediately when autoPlay is true.
+   */
+  jumpToParagraph(index: number, autoPlay = true): void {
+    const target = this.findNextSpeakable(index);
+    if (target === null) return;
+    if (!this.state.enabled) {
+      this.state = { ...this.state, enabled: true, activeBlockIndex: target };
+    }
+    if (autoPlay) {
+      this.speakAt(target);
+    } else {
+      this.generation++;
+      this.driver.stop();
+      this.state = { ...this.state, playing: false, activeBlockIndex: target };
+      this.listeners.onActiveBlockChange?.(target);
+      this.emit();
+    }
+  }
+
   pause(): void {
     if (!this.state.playing) return;
     this.generation++;

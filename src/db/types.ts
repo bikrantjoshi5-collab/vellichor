@@ -68,6 +68,7 @@ export interface NovelWithStats extends NovelRow {
   downloaded_chapters: number;
   last_chapter_name: string | null;
   last_chapter_id: number | null;
+  last_chapter_progress_pct?: number;
 }
 
 export interface ShelfRow {
@@ -89,6 +90,7 @@ export interface ChapterRow {
   is_read: number;
   read_progress_pct: number;
   scroll_paragraph_idx: number;
+  scroll_offset_y?: number;
   is_downloaded: number;
   content_path: string | null;
   assets_dir: string | null;

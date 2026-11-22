@@ -1,5 +1,13 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
@@ -10,6 +18,13 @@ import { getRuntimePlugin } from '@/services/pluginLoader';
 import { libraryRepo } from '@/db/repositories/libraryRepo';
 import { chapterRepo } from '@/db/repositories/chapterRepo';
 import { cloneFilters, countActiveFilters, resetFilters } from '@/plugins/filters';
+import {
+  buildCatalogCacheKey,
+  isCacheStale,
+  mergeUniqueNovels,
+  readCatalogCache,
+  writeCatalogCache,
+} from '@/plugins/catalogCache';
 import type { PluginFilters, PluginNovelItem } from '@/plugins/types';
 import { ThemedText } from '@/components/ThemedText';
 import { Button } from '@/components/Button';
@@ -52,7 +67,9 @@ export default function SourceBrowseScreen() {
   const [items, setItems] = useState<PluginNovelItem[]>([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
 
@@ -61,6 +78,17 @@ export default function SourceBrowseScreen() {
   const [baseFilters, setBaseFilters] = useState<PluginFilters>({});
   const [activeFilters, setActiveFilters] = useState<PluginFilters>({});
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+
+  // Concurrency guards for continuous infinite scrolling + stale request cancellation
+  const requestIdRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const pageRef = useRef(1);
+  const itemsRef = useRef<PluginNovelItem[]>([]);
+
+  itemsRef.current = items;
+  pageRef.current = page;
+  hasMoreRef.current = hasMore;
 
   const activeFilterCount = useMemo(
     () => countActiveFilters(activeFilters, baseFilters),
@@ -75,57 +103,146 @@ export default function SourceBrowseScreen() {
     return `${site.replace(/\/$/, '')}/${cover.replace(/^\//, '')}`;
   };
 
-  const fetchCatalog = async (opts: {
-    pageNo: number;
-    append: boolean;
-    modeOverride?: BrowseMode;
-    filtersOverride?: PluginFilters;
-    searchOverride?: string;
-  }) => {
-    if (!db || !pluginId) return;
-    if (opts.append) setLoadingMore(true);
-    else setLoading(true);
-    try {
-      const plugin = await getRuntimePlugin(db, pluginId);
-      if (!plugin) throw new Error('Extension not installed');
-
-      const pluginBase = cloneFilters(plugin.filters);
-      if (Object.keys(baseFilters).length === 0 && Object.keys(pluginBase).length > 0) {
-        setBaseFilters(pluginBase);
-        if (!opts.filtersOverride) {
-          setActiveFilters(cloneFilters(pluginBase));
-        }
-      }
+  const loadCatalog = useCallback(
+    async (opts: {
+      pageNo: number;
+      append: boolean;
+      modeOverride?: BrowseMode;
+      filtersOverride?: PluginFilters;
+      searchOverride?: string;
+      forceRefresh?: boolean;
+    }) => {
+      if (!db || !pluginId) return;
 
       const effectiveMode = opts.modeOverride ?? mode;
       const term = (opts.searchOverride ?? query).trim();
-      const baseOrEmpty = Object.keys(baseFilters).length > 0 ? baseFilters : pluginBase;
-      const filtersToUse =
-        effectiveMode === 'filter'
-          ? opts.filtersOverride ?? (Object.keys(activeFilters).length > 0 ? activeFilters : baseOrEmpty)
-          : baseOrEmpty;
-      const latestToUse = effectiveMode === 'latest';
+      const cacheMode = term.length > 0 ? 'search' : effectiveMode;
+      const filtersForKey = opts.filtersOverride ?? activeFilters;
+      const cacheKey = buildCatalogCacheKey({
+        pluginId,
+        mode: cacheMode,
+        query: term,
+        filters: cacheMode === 'filter' ? filtersForKey : undefined,
+      });
 
-      const res = term
-        ? await plugin.searchNovels(term, opts.pageNo)
-        : await plugin.popularNovels(opts.pageNo, {
-            filters: filtersToUse,
-            showLatestNovels: latestToUse,
+      const reqId = opts.append ? requestIdRef.current : ++requestIdRef.current;
+
+      if (opts.append) {
+        if (loadingMoreRef.current || !hasMoreRef.current) return;
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+      } else {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+
+        // 1. Instant SQLite cache hydration for page 1 so previously browsed sites appear immediately!
+        if (!opts.forceRefresh) {
+          const cached = await readCatalogCache(db, cacheKey);
+          if (reqId !== requestIdRef.current) return;
+          if (cached && cached.items.length > 0) {
+            setItems(cached.items);
+            setPage(cached.lastPage);
+            setHasMore(cached.hasMore);
+            setLoading(false);
+
+            // Also warm plugin filter metadata silently so Filter sheet is instantly populated
+            void getRuntimePlugin(db, pluginId).then((p) => {
+              if (p?.filters && Object.keys(baseFilters).length === 0 && Object.keys(p.filters).length > 0) {
+                const cloned = cloneFilters(p.filters);
+                setBaseFilters(cloned);
+                setActiveFilters((prev) => (Object.keys(prev).length > 0 ? prev : cloneFilters(cloned)));
+              }
+            });
+
+            // Skip network fetch completely if cache is fresh (< 15 min)!
+            if (!isCacheStale(cached.updatedAt)) {
+              return;
+            }
+            // Otherwise silently refresh page 1 in the background without blocking the UI
+            setRefreshing(true);
+          } else {
+            setLoading(true);
+          }
+        } else {
+          setRefreshing(true);
+        }
+      }
+
+      try {
+        const plugin = await getRuntimePlugin(db, pluginId);
+        if (!plugin) throw new Error('Extension not installed');
+
+        const pluginBase = cloneFilters(plugin.filters);
+        if (Object.keys(baseFilters).length === 0 && Object.keys(pluginBase).length > 0) {
+          setBaseFilters(pluginBase);
+          if (!opts.filtersOverride) {
+            setActiveFilters((prev) => (Object.keys(prev).length > 0 ? prev : cloneFilters(pluginBase)));
+          }
+        }
+
+        const baseOrEmpty = Object.keys(baseFilters).length > 0 ? baseFilters : pluginBase;
+        const filtersToUse =
+          effectiveMode === 'filter'
+            ? opts.filtersOverride ?? (Object.keys(activeFilters).length > 0 ? activeFilters : baseOrEmpty)
+            : baseOrEmpty;
+        const latestToUse = effectiveMode === 'latest';
+
+        const res = term
+          ? await plugin.searchNovels(term, opts.pageNo)
+          : await plugin.popularNovels(opts.pageNo, {
+              filters: filtersToUse,
+              showLatestNovels: latestToUse,
+            });
+
+        if (reqId !== requestIdRef.current) return;
+
+        const normalized = res.map((n) => ({ ...n, cover: resolveCover(n.cover, plugin.site) }));
+
+        if (opts.append) {
+          const { merged, addedCount } = mergeUniqueNovels(itemsRef.current, normalized);
+          const nextHasMore = normalized.length > 0 && addedCount > 0;
+          setItems(merged);
+          setPage(opts.pageNo);
+          setHasMore(nextHasMore);
+          await writeCatalogCache(db, {
+            cacheKey,
+            pluginId,
+            items: merged,
+            lastPage: opts.pageNo,
+            hasMore: nextHasMore,
           });
-
-      const normalized = res.map((n) => ({ ...n, cover: resolveCover(n.cover, plugin.site) }));
-      setPage(opts.pageNo);
-      setItems((prev) => (opts.append ? [...prev, ...normalized] : normalized));
-    } catch (err) {
-      Alert.alert('Source Error', err instanceof Error ? err.message : 'Unable to load catalog');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  };
+        } else {
+          const { merged } = mergeUniqueNovels([], normalized);
+          const nextHasMore = merged.length > 0;
+          setItems(merged);
+          setPage(1);
+          setHasMore(nextHasMore);
+          await writeCatalogCache(db, {
+            cacheKey,
+            pluginId,
+            items: merged,
+            lastPage: 1,
+            hasMore: nextHasMore,
+          });
+        }
+      } catch (err) {
+        if (reqId === requestIdRef.current && itemsRef.current.length === 0) {
+          Alert.alert('Source Error', err instanceof Error ? err.message : 'Unable to load catalog');
+        }
+      } finally {
+        if (reqId === requestIdRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      }
+    },
+    [db, pluginId, mode, query, activeFilters, baseFilters]
+  );
 
   useEffect(() => {
-    void fetchCatalog({ pageNo: 1, append: false, modeOverride: 'popular' });
+    void loadCatalog({ pageNo: 1, append: false, modeOverride: 'popular' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, pluginId]);
 
@@ -136,13 +253,21 @@ export default function SourceBrowseScreen() {
     }
     setMode(nextMode);
     setQuery('');
-    void fetchCatalog({
+    void loadCatalog({
       pageNo: 1,
       append: false,
       modeOverride: nextMode,
       searchOverride: '',
     });
   };
+
+  const handleLoadNextContinuous = useCallback(() => {
+    if (loading || loadingMoreRef.current || !hasMoreRef.current) return;
+    void loadCatalog({
+      pageNo: pageRef.current + 1,
+      append: true,
+    });
+  }, [loading, loadCatalog]);
 
   const openNovel = useCallback(
     async (item: PluginNovelItem) => {
@@ -213,20 +338,20 @@ export default function SourceBrowseScreen() {
           placeholderTextColor={mossColors.muted}
           style={styles.input}
           returnKeyType="search"
-          onSubmitEditing={() => void fetchCatalog({ pageNo: 1, append: false })}
+          onSubmitEditing={() => void loadCatalog({ pageNo: 1, append: false })}
         />
         {query.length > 0 ? (
           <Pressable
             onPress={() => {
               setQuery('');
-              void fetchCatalog({ pageNo: 1, append: false, searchOverride: '' });
+              void loadCatalog({ pageNo: 1, append: false, searchOverride: '' });
             }}
             hitSlop={6}
           >
             <X size={16} color={mossColors.muted} strokeWidth={1.8} />
           </Pressable>
         ) : null}
-        <Button title="Go" size="sm" onPress={() => void fetchCatalog({ pageNo: 1, append: false })} />
+        <Button title="Go" size="sm" onPress={() => void loadCatalog({ pageNo: 1, append: false })} />
       </View>
 
       {/* 3-Option Site Mode Switcher: Popular | Latest | Filter */}
@@ -305,10 +430,7 @@ export default function SourceBrowseScreen() {
               ? `Manual filters active (${activeFilterCount} applied)`
               : 'Showing manual filter results'}
           </ThemedText>
-          <Pressable
-            onPress={() => setFilterSheetOpen(true)}
-            style={styles.filterBannerBtn}
-          >
+          <Pressable onPress={() => setFilterSheetOpen(true)} style={styles.filterBannerBtn}>
             <SlidersHorizontal size={13} color={mossColors.accent} strokeWidth={1.9} />
             <ThemedText variant="caption" style={{ color: mossColors.accent }}>
               Edit
@@ -319,7 +441,7 @@ export default function SourceBrowseScreen() {
               const fresh = resetFilters(baseFilters);
               setActiveFilters(fresh);
               setMode('popular');
-              void fetchCatalog({
+              void loadCatalog({
                 pageNo: 1,
                 append: false,
                 modeOverride: 'popular',
@@ -344,18 +466,29 @@ export default function SourceBrowseScreen() {
           numColumns={2}
           estimatedItemSize={240}
           extraData={openingPath}
-          keyExtractor={(item, idx) => `${item.path}-${idx}`}
+          keyExtractor={(item) => item.path}
           contentContainerStyle={styles.listContent}
           renderItem={renderCard}
+          onEndReached={handleLoadNextContinuous}
+          onEndReachedThreshold={0.65}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void loadCatalog({ pageNo: 1, append: false, forceRefresh: true })}
+              tintColor={mossColors.accent}
+            />
+          }
           ListFooterComponent={
             items.length > 0 ? (
-              <View style={styles.footerMore}>
-                <Button
-                  title={loadingMore ? 'Loading…' : `Load Page ${page + 1}`}
-                  variant="secondary"
-                  loading={loadingMore}
-                  onPress={() => void fetchCatalog({ pageNo: page + 1, append: true })}
-                />
+              <View style={styles.footerStatus}>
+                {loadingMore ? (
+                  <View style={styles.footerLoadingRow}>
+                    <ActivityIndicator size="small" color={mossColors.accent} />
+                    <ThemedText variant="caption">Loading more novels…</ThemedText>
+                  </View>
+                ) : !hasMore ? (
+                  <ThemedText variant="caption">End of catalog · {items.length} novels cached</ThemedText>
+                ) : null}
               </View>
             ) : null
           }
@@ -366,6 +499,7 @@ export default function SourceBrowseScreen() {
         visible={filterSheetOpen}
         sourceName={meta?.name || String(pluginId)}
         filters={activeFilters}
+        baseFilters={baseFilters}
         hideLatestToggle
         onChangeFilters={setActiveFilters}
         onReset={() => {
@@ -375,7 +509,7 @@ export default function SourceBrowseScreen() {
         onApply={() => {
           setQuery('');
           setMode('filter');
-          void fetchCatalog({
+          void loadCatalog({
             pageNo: 1,
             append: false,
             modeOverride: 'filter',
@@ -488,8 +622,14 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 4 / 5,
   },
-  footerMore: {
+  footerStatus: {
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  footerLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
 });

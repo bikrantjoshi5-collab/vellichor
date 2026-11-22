@@ -18,6 +18,7 @@ export async function initDatabase(db: SqlExecutor): Promise<void> {
   await ensureColumn(db, 'plugins', 'installed_etag', 'TEXT');
   await ensureColumn(db, 'plugins', 'remote_etag', 'TEXT');
   await ensureColumn(db, 'tracker_links', 'pending_chapter', 'REAL');
+  await ensureColumn(db, 'chapters', 'scroll_offset_y', 'REAL NOT NULL DEFAULT 0');
 }
 
 export async function getSetting(db: SqlExecutor, key: string): Promise<string | null> {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -8,7 +8,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { ChevronDown, ChevronRight, Minus, Plus, RotateCcw, X } from 'lucide-react-native';
+import {
+  ChevronDown,
+  ChevronRight,
+  Minus,
+  Plus,
+  RotateCcw,
+  Search,
+  X,
+} from 'lucide-react-native';
 import { mossColors, motion, radius, spacing } from '@/theme';
 import type { PluginFilterItem, PluginFilters } from '@/plugins/types';
 import {
@@ -26,6 +34,7 @@ export interface SourceFilterSheetProps {
   visible: boolean;
   sourceName: string;
   filters: PluginFilters;
+  baseFilters?: PluginFilters;
   showLatestNovels?: boolean;
   hideLatestToggle?: boolean;
   onChangeFilters: (next: PluginFilters) => void;
@@ -35,10 +44,43 @@ export interface SourceFilterSheetProps {
   onClose: () => void;
 }
 
+interface ActiveBadge {
+  filterKey: string;
+  label: string;
+  clear: () => void;
+}
+
+function getGroupSelectionCount(item: PluginFilterItem, baseItem?: PluginFilterItem): number {
+  const kind = normalizeFilterKind(item.type);
+  if (kind === 'checkbox') {
+    return Array.isArray(item.value) ? item.value.length : 0;
+  }
+  if (kind === 'xcheckbox') {
+    const val =
+      item.value && typeof item.value === 'object' && !Array.isArray(item.value)
+        ? item.value
+        : { include: [], exclude: [] };
+    return (val.include?.length ?? 0) + (val.exclude?.length ?? 0);
+  }
+  if (kind === 'switch') {
+    return Boolean(item.value) !== Boolean(baseItem?.value) ? 1 : 0;
+  }
+  if (kind === 'text') {
+    return typeof item.value === 'string' && item.value.trim().length > 0 ? 1 : 0;
+  }
+  if (kind === 'picker') {
+    const baseVal = baseItem ? String(baseItem.value ?? '') : '';
+    const currVal = String(item.value ?? '');
+    return currVal !== baseVal && currVal.length > 0 ? 1 : 0;
+  }
+  return 0;
+}
+
 export function SourceFilterSheet({
   visible,
   sourceName,
   filters,
+  baseFilters,
   showLatestNovels = false,
   hideLatestToggle = false,
   onChangeFilters,
@@ -48,23 +90,118 @@ export function SourceFilterSheet({
   onClose,
 }: SourceFilterSheetProps) {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const entries = Object.entries(filters);
+  const [filterSearch, setFilterSearch] = useState('');
 
-  const toggleGroup = (key: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  const entries = useMemo(() => Object.entries(filters), [filters]);
+  const queryLower = filterSearch.trim().toLowerCase();
+
+  // Collect concise active filter summary pills so users can see & clear selections in 1 tap
+  const activeBadges = useMemo<ActiveBadge[]>(() => {
+    const list: ActiveBadge[] = [];
+    for (const [key, item] of entries) {
+      const kind = normalizeFilterKind(item.type);
+      const baseItem = baseFilters?.[key];
+      const options = Array.isArray(item.options) ? item.options : [];
+      const optLabel = (val: string) => options.find((o) => o.value === val)?.label ?? val;
+
+      if (kind === 'picker') {
+        const curr = String(item.value ?? '');
+        const base = String(baseItem?.value ?? '');
+        if (curr && curr !== base) {
+          list.push({
+            filterKey: key,
+            label: `${item.label || key}: ${optLabel(curr)}`,
+            clear: () => onChangeFilters(updateFilterValue(filters, key, base)),
+          });
+        }
+      } else if (kind === 'checkbox' && Array.isArray(item.value)) {
+        for (const v of item.value) {
+          list.push({
+            filterKey: `${key}-${v}`,
+            label: optLabel(v),
+            clear: () => onChangeFilters(toggleCheckboxOption(filters, key, v)),
+          });
+        }
+      } else if (kind === 'xcheckbox' && item.value && typeof item.value === 'object' && !Array.isArray(item.value)) {
+        for (const v of item.value.include ?? []) {
+          list.push({
+            filterKey: `${key}-inc-${v}`,
+            label: `+ ${optLabel(v)}`,
+            clear: () => {
+              const nextInc = (item.value as { include?: string[]; exclude?: string[] }).include?.filter((x) => x !== v) ?? [];
+              const nextExc = (item.value as { include?: string[]; exclude?: string[] }).exclude ?? [];
+              onChangeFilters(updateFilterValue(filters, key, { include: nextInc, exclude: nextExc }));
+            },
+          });
+        }
+        for (const v of item.value.exclude ?? []) {
+          list.push({
+            filterKey: `${key}-exc-${v}`,
+            label: `− ${optLabel(v)}`,
+            clear: () => {
+              const nextInc = (item.value as { include?: string[]; exclude?: string[] }).include ?? [];
+              const nextExc = (item.value as { include?: string[]; exclude?: string[] }).exclude?.filter((x) => x !== v) ?? [];
+              onChangeFilters(updateFilterValue(filters, key, { include: nextInc, exclude: nextExc }));
+            },
+          });
+        }
+      } else if (kind === 'text' && typeof item.value === 'string' && item.value.trim()) {
+        list.push({
+          filterKey: key,
+          label: `${item.label || key}: ${item.value.trim()}`,
+          clear: () => onChangeFilters(updateFilterValue(filters, key, '')),
+        });
+      } else if (kind === 'switch' && Boolean(item.value) !== Boolean(baseItem?.value)) {
+        list.push({
+          filterKey: key,
+          label: `${item.label || key}: ${item.value ? 'On' : 'Off'}`,
+          clear: () => onChangeFilters(updateFilterValue(filters, key, Boolean(baseItem?.value))),
+        });
+      }
+    }
+    return list;
+  }, [entries, baseFilters, filters, onChangeFilters]);
+
+  const toggleGroup = (key: string, defaultExpanded: boolean) => {
+    setExpandedGroups((prev) => {
+      const current = prev[key] !== undefined ? prev[key] : defaultExpanded;
+      return { ...prev, [key]: !current };
+    });
   };
 
-  const renderFilterControl = (key: string, item: PluginFilterItem) => {
+  const renderFilterControl = (key: string, item: PluginFilterItem, idx: number) => {
     const kind = normalizeFilterKind(item.type);
+    const title = item.label || key;
+    const titleMatches = !queryLower || title.toLowerCase().includes(queryLower);
+    const allOptions = Array.isArray(item.options) ? item.options : [];
+    const visibleOptions = queryLower
+      ? titleMatches
+        ? allOptions
+        : allOptions.filter((o) => o.label.toLowerCase().includes(queryLower))
+      : allOptions;
+
+    // Hide completely unrelated sections during search
+    if (queryLower && !titleMatches && visibleOptions.length === 0) {
+      return null;
+    }
+
+    const activeCount = getGroupSelectionCount(item, baseFilters?.[key]);
+    const defaultExpanded = idx < 2 || allOptions.length <= 12 || activeCount > 0;
+    const isExpanded =
+      queryLower.length > 0
+        ? true
+        : expandedGroups[key] !== undefined
+        ? expandedGroups[key]
+        : defaultExpanded;
 
     if (kind === 'text') {
       return (
-        <View key={key} style={styles.filterSection}>
-          <ThemedText variant="cardTitle">{item.label || key}</ThemedText>
+        <View key={key} style={styles.filterCard}>
+          <ThemedText variant="cardTitle">{title}</ThemedText>
           <TextInput
             value={typeof item.value === 'string' ? item.value : ''}
             onChangeText={(txt) => onChangeFilters(updateFilterValue(filters, key, txt))}
-            placeholder={`Enter ${item.label || key}...`}
+            placeholder={`Type ${title}...`}
             placeholderTextColor={mossColors.muted}
             style={styles.input}
           />
@@ -74,9 +211,9 @@ export function SourceFilterSheet({
 
     if (kind === 'switch') {
       return (
-        <View key={key} style={styles.switchRow}>
+        <View key={key} style={styles.filterCardRow}>
           <ThemedText variant="cardTitle" style={{ flex: 1 }}>
-            {item.label || key}
+            {title}
           </ThemedText>
           <Switch
             value={Boolean(item.value)}
@@ -88,44 +225,38 @@ export function SourceFilterSheet({
       );
     }
 
-    const options = Array.isArray(item.options) ? item.options : [];
-    const isLarge = options.length > 10;
-    const isExpanded = !isLarge || Boolean(expandedGroups[key]);
-
     if (kind === 'picker') {
       const selectedVal = typeof item.value === 'string' ? item.value : '';
-      const selectedLabel = options.find((o) => o.value === selectedVal)?.label;
+      const selectedLabel = allOptions.find((o) => o.value === selectedVal)?.label;
       return (
-        <View key={key} style={styles.filterSection}>
-          <Pressable
-            onPress={() => isLarge && toggleGroup(key)}
-            style={styles.groupHeader}
-          >
-            <View style={{ flex: 1 }}>
-              <ThemedText variant="cardTitle">{item.label || key}</ThemedText>
-              {selectedLabel ? (
-                <ThemedText variant="caption" style={{ color: mossColors.accent }}>
-                  {selectedLabel}
-                </ThemedText>
-              ) : null}
+        <View key={key} style={styles.filterCard}>
+          <Pressable onPress={() => toggleGroup(key, defaultExpanded)} style={styles.groupHeader}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <ThemedText variant="cardTitle">{title}</ThemedText>
+              <ThemedText
+                variant="caption"
+                style={{ color: selectedLabel ? mossColors.accent : mossColors.muted }}
+                numberOfLines={1}
+              >
+                {selectedLabel || `${allOptions.length} choices`}
+              </ThemedText>
             </View>
-            {isLarge ? (
-              isExpanded ? (
-                <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
-              ) : (
-                <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
-              )
-            ) : null}
+            {isExpanded ? (
+              <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
+            ) : (
+              <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
+            )}
           </Pressable>
 
           {isExpanded ? (
             <View style={styles.optionWrap}>
-              {options.map((opt) => (
+              {visibleOptions.map((opt) => (
                 <Chip
                   key={`${key}-${opt.value}`}
                   label={opt.label}
                   active={selectedVal === opt.value}
                   onPress={() => onChangeFilters(updateFilterValue(filters, key, opt.value))}
+                  style={selectedVal === opt.value ? undefined : styles.nestedChip}
                 />
               ))}
             </View>
@@ -137,34 +268,41 @@ export function SourceFilterSheet({
     if (kind === 'checkbox') {
       const selectedArr = Array.isArray(item.value) ? item.value : [];
       return (
-        <View key={key} style={styles.filterSection}>
-          <Pressable
-            onPress={() => isLarge && toggleGroup(key)}
-            style={styles.groupHeader}
-          >
-            <View style={{ flex: 1 }}>
-              <ThemedText variant="cardTitle">{item.label || key}</ThemedText>
+        <View key={key} style={styles.filterCard}>
+          <Pressable onPress={() => toggleGroup(key, defaultExpanded)} style={styles.groupHeader}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <View style={styles.titleBadgeRow}>
+                <ThemedText variant="cardTitle">{title}</ThemedText>
+                {selectedArr.length > 0 ? (
+                  <View style={styles.countBadge}>
+                    <ThemedText variant="mono" style={{ color: mossColors.accentFg, fontSize: 10 }}>
+                      {selectedArr.length}
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </View>
               <ThemedText variant="caption">
-                {selectedArr.length > 0 ? `${selectedArr.length} selected` : `${options.length} options`}
+                {selectedArr.length > 0
+                  ? `${selectedArr.length} selected · ${allOptions.length} total`
+                  : `Select any (${allOptions.length} options)`}
               </ThemedText>
             </View>
-            {isLarge ? (
-              isExpanded ? (
-                <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
-              ) : (
-                <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
-              )
-            ) : null}
+            {isExpanded ? (
+              <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
+            ) : (
+              <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
+            )}
           </Pressable>
 
           {isExpanded ? (
             <View style={styles.optionWrap}>
-              {options.map((opt) => (
+              {visibleOptions.map((opt) => (
                 <Chip
                   key={`${key}-${opt.value}`}
                   label={opt.label}
                   active={selectedArr.includes(opt.value)}
                   onPress={() => onChangeFilters(toggleCheckboxOption(filters, key, opt.value))}
+                  style={selectedArr.includes(opt.value) ? undefined : styles.nestedChip}
                 />
               ))}
             </View>
@@ -173,7 +311,7 @@ export function SourceFilterSheet({
       );
     }
 
-    // Tri-state ExcludableCheckboxGroup (tap: neutral -> include -> exclude -> neutral)
+    // Tri-state ExcludableCheckboxGroup (tap once = include, twice = exclude, third = neutral)
     const exVal =
       item.value && typeof item.value === 'object' && !Array.isArray(item.value)
         ? item.value
@@ -182,28 +320,35 @@ export function SourceFilterSheet({
     const excCount = exVal.exclude?.length ?? 0;
 
     return (
-      <View key={key} style={styles.filterSection}>
-        <Pressable onPress={() => isLarge && toggleGroup(key)} style={styles.groupHeader}>
-          <View style={{ flex: 1 }}>
-            <ThemedText variant="cardTitle">{item.label || key}</ThemedText>
+      <View key={key} style={styles.filterCard}>
+        <Pressable onPress={() => toggleGroup(key, defaultExpanded)} style={styles.groupHeader}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <View style={styles.titleBadgeRow}>
+              <ThemedText variant="cardTitle">{title}</ThemedText>
+              {incCount + excCount > 0 ? (
+                <View style={styles.countBadge}>
+                  <ThemedText variant="mono" style={{ color: mossColors.accentFg, fontSize: 10 }}>
+                    {incCount + excCount}
+                  </ThemedText>
+                </View>
+              ) : null}
+            </View>
             <ThemedText variant="caption">
               {incCount > 0 || excCount > 0
-                ? `+${incCount} include · -${excCount} exclude`
-                : `Tap once to include, twice to exclude (${options.length})`}
+                ? `+${incCount} include · −${excCount} exclude`
+                : `1st tap Include (+) · 2nd tap Exclude (−) · ${allOptions.length} tags`}
             </ThemedText>
           </View>
-          {isLarge ? (
-            isExpanded ? (
-              <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
-            ) : (
-              <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
-            )
-          ) : null}
+          {isExpanded ? (
+            <ChevronDown size={16} color={mossColors.muted} strokeWidth={1.8} />
+          ) : (
+            <ChevronRight size={16} color={mossColors.muted} strokeWidth={1.8} />
+          )}
         </Pressable>
 
         {isExpanded ? (
           <View style={styles.optionWrap}>
-            {options.map((opt) => {
+            {visibleOptions.map((opt) => {
               const st = getExcludableOptionState(item, opt.value);
               return (
                 <Pressable
@@ -254,7 +399,7 @@ export function SourceFilterSheet({
                 {sourceName} Filters
               </ThemedText>
               <ThemedText variant="caption">
-                {entries.length} site filter{entries.length === 1 ? '' : 's'} available
+                {entries.length} filter group{entries.length === 1 ? '' : 's'} · {activeBadges.length} active
               </ThemedText>
             </View>
             <Pressable
@@ -275,13 +420,57 @@ export function SourceFilterSheet({
             </Pressable>
           </View>
 
+          {/* Fast Filter Search Bar — find any genre, status, or sort option instantly */}
+          {entries.length > 0 ? (
+            <View style={styles.searchBar}>
+              <Search size={15} color={mossColors.muted} strokeWidth={1.8} />
+              <TextInput
+                testID="source-filter-search"
+                value={filterSearch}
+                onChangeText={setFilterSearch}
+                placeholder="Quick find genre, tag, status, or sort..."
+                placeholderTextColor={mossColors.muted}
+                style={styles.searchInput}
+              />
+              {filterSearch.length > 0 ? (
+                <Pressable onPress={() => setFilterSearch('')} hitSlop={6}>
+                  <X size={15} color={mossColors.muted} strokeWidth={1.8} />
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* Active Filters Strip — see everything active at a glance & tap × to remove */}
+          {activeBadges.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.activeStripWrap}
+              contentContainerStyle={styles.activeStrip}
+            >
+              {activeBadges.map((badge) => (
+                <Pressable
+                  key={badge.filterKey}
+                  onPress={badge.clear}
+                  style={styles.activePill}
+                >
+                  <ThemedText variant="caption" style={{ color: mossColors.accentFg }} numberOfLines={1}>
+                    {badge.label}
+                  </ThemedText>
+                  <X size={12} color={mossColors.accentFg} strokeWidth={2.2} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          ) : null}
+
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={styles.body}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
             {!hideLatestToggle && onChangeShowLatest ? (
-              <View style={styles.switchRow}>
+              <View style={styles.filterCardRow}>
                 <View style={{ flex: 1 }}>
                   <ThemedText variant="cardTitle">Sort by Latest Updates</ThemedText>
                   <ThemedText variant="caption">Switch between Popular catalog and Latest releases</ThemedText>
@@ -300,15 +489,15 @@ export function SourceFilterSheet({
                 This source does not expose extra manual filters beyond Popular, Latest, and keyword search.
               </ThemedText>
             ) : (
-              entries.map(([key, item]) => renderFilterControl(key, item))
+              entries.map(([key, item], idx) => renderFilterControl(key, item, idx))
             )}
           </ScrollView>
 
           <View style={styles.footer}>
-            <Button title="Reset" variant="ghost" onPress={onReset} style={{ flex: 1 }} />
+            <Button title="Reset All" variant="ghost" onPress={onReset} style={{ flex: 1 }} />
             <Button
               testID="source-filter-apply"
-              title="Apply Filters"
+              title={activeBadges.length > 0 ? `Apply Filters (${activeBadges.length})` : 'Apply Filters'}
               onPress={() => {
                 onApply();
                 onClose();
@@ -337,7 +526,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.smd,
     paddingBottom: spacing.lg,
-    maxHeight: '86%',
+    maxHeight: '88%',
   },
   handle: {
     width: 40,
@@ -351,7 +540,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginBottom: spacing.smd,
+    marginBottom: spacing.sm,
   },
   iconBtn: {
     width: 34,
@@ -361,27 +550,60 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.smd,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.md,
+    backgroundColor: mossColors.surface,
+    marginBottom: spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    color: mossColors.fg,
+    fontSize: 13.5,
+    paddingVertical: spacing.xs,
+  },
+  activeStripWrap: {
+    flexGrow: 0,
+    marginBottom: spacing.sm,
+  },
+  activeStrip: {
+    gap: spacing.xs + 2,
+    paddingVertical: 2,
+  },
+  activePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: spacing.xs + 1,
+    paddingHorizontal: spacing.sm + 2,
+    borderRadius: radius.full,
+    backgroundColor: mossColors.accent,
+  },
   scroll: {
     flexGrow: 0,
   },
   body: {
-    gap: spacing.md,
+    gap: spacing.sm + 2,
     paddingBottom: spacing.lg,
   },
-  switchRow: {
+  filterCard: {
+    backgroundColor: mossColors.surface,
+    borderRadius: radius.card,
+    padding: spacing.smd,
+    gap: spacing.sm,
+  },
+  filterCardRow: {
+    backgroundColor: mossColors.surface,
+    borderRadius: radius.card,
+    padding: spacing.smd,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.smd,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: mossColors.border,
-  },
-  filterSection: {
-    gap: spacing.sm,
-    paddingBottom: spacing.smd,
-    borderBottomWidth: 1,
-    borderBottomColor: mossColors.border,
   },
   groupHeader: {
     flexDirection: 'row',
@@ -389,17 +611,34 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
+  titleBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs + 2,
+  },
+  countBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: radius.full,
+    backgroundColor: mossColors.accent,
+  },
   optionWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.xs + 2,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: mossColors.border,
+  },
+  nestedChip: {
+    backgroundColor: mossColors.surfaceElevated,
   },
   input: {
-    backgroundColor: mossColors.surface,
+    backgroundColor: mossColors.surfaceElevated,
     color: mossColors.fg,
     borderRadius: radius.md,
     paddingHorizontal: spacing.smd,
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.sm + 1,
     fontSize: 14,
   },
   triChip: {
@@ -409,7 +648,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 3,
     paddingHorizontal: spacing.smd,
     borderRadius: radius.full,
-    backgroundColor: mossColors.surface,
+    backgroundColor: mossColors.surfaceElevated,
   },
   triInclude: {
     backgroundColor: mossColors.good,

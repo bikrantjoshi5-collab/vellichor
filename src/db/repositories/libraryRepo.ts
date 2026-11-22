@@ -127,8 +127,18 @@ export const libraryRepo = {
         COALESCE(SUM(CASE WHEN c.is_read = 1 THEN 1 ELSE 0 END), 0) AS read_chapters,
         COALESCE(SUM(CASE WHEN c.is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_chapters,
         COALESCE(SUM(CASE WHEN c.is_downloaded = 1 THEN 1 ELSE 0 END), 0) AS downloaded_chapters,
-        (SELECT ch.name FROM chapters ch WHERE ch.novel_id = n.id ORDER BY ch.updated_at DESC, ch.chapter_number DESC LIMIT 1) AS last_chapter_name,
-        (SELECT ch.id FROM chapters ch WHERE ch.novel_id = n.id ORDER BY ch.updated_at DESC, ch.chapter_number DESC LIMIT 1) AS last_chapter_id
+        COALESCE(
+          (SELECT ch.name FROM reading_history rh INNER JOIN chapters ch ON ch.id = rh.chapter_id WHERE rh.novel_id = n.id ORDER BY rh.read_at DESC LIMIT 1),
+          (SELECT ch.name FROM chapters ch WHERE ch.novel_id = n.id ORDER BY ch.updated_at DESC, ch.chapter_number DESC LIMIT 1)
+        ) AS last_chapter_name,
+        COALESCE(
+          (SELECT rh.chapter_id FROM reading_history rh WHERE rh.novel_id = n.id ORDER BY rh.read_at DESC LIMIT 1),
+          (SELECT ch.id FROM chapters ch WHERE ch.novel_id = n.id ORDER BY ch.updated_at DESC, ch.chapter_number DESC LIMIT 1)
+        ) AS last_chapter_id,
+        COALESCE(
+          (SELECT ch.read_progress_pct FROM reading_history rh INNER JOIN chapters ch ON ch.id = rh.chapter_id WHERE rh.novel_id = n.id ORDER BY rh.read_at DESC LIMIT 1),
+          0
+        ) AS last_chapter_progress_pct
       FROM novels n
       LEFT JOIN chapters c ON c.novel_id = n.id
       WHERE ${clauses.join(' AND ')}

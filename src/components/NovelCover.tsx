@@ -23,9 +23,11 @@ export function NovelCover({ uri, title, style }: NovelCoverProps) {
       {uri ? (
         <Image
           source={{ uri }}
+          recyclingKey={uri}
+          cachePolicy="memory-disk"
           style={StyleSheet.absoluteFill}
           contentFit="cover"
-          transition={180}
+          transition={140}
         />
       ) : (
         <View style={styles.placeholder}>

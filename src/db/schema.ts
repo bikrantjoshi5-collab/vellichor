@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS chapters (
   is_read INTEGER NOT NULL DEFAULT 0,
   read_progress_pct REAL NOT NULL DEFAULT 0,
   scroll_paragraph_idx INTEGER NOT NULL DEFAULT 0,
+  scroll_offset_y REAL NOT NULL DEFAULT 0,
   is_downloaded INTEGER NOT NULL DEFAULT 0,
   content_path TEXT,
   assets_dir TEXT,
@@ -136,4 +137,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS source_catalog_cache (
+  cache_key TEXT PRIMARY KEY,
+  plugin_id TEXT NOT NULL,
+  items_json TEXT NOT NULL,
+  last_page INTEGER NOT NULL DEFAULT 1,
+  has_more INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_cache_plugin ON source_catalog_cache(plugin_id, updated_at DESC);
 `;

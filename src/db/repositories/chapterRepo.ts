@@ -116,23 +116,34 @@ export const chapterRepo = {
   async saveReadProgress(
     db: SqlExecutor,
     chapterId: number,
-    progress: { isRead: boolean; readProgressPct: number; scrollParagraphIdx: number }
+    progress: {
+      isRead: boolean;
+      readProgressPct: number;
+      scrollParagraphIdx: number;
+      scrollOffsetY?: number;
+    }
   ): Promise<void> {
     await db.runAsync(
       `UPDATE chapters SET
         is_read = ?,
         read_progress_pct = ?,
         scroll_paragraph_idx = ?,
+        scroll_offset_y = ?,
         updated_at = ?
       WHERE id = ?`,
       [
         progress.isRead ? 1 : 0,
-        Math.max(0, Math.min(100, progress.readProgressPct)),
-        Math.max(0, progress.scrollParagraphIdx),
+        Math.max(0, Math.min(100, Math.round(progress.readProgressPct * 10) / 10)),
+        Math.max(0, Math.floor(progress.scrollParagraphIdx)),
+        Math.max(0, Math.round(progress.scrollOffsetY ?? 0)),
         Date.now(),
         chapterId,
       ]
     );
+  },
+
+  async touchChapterOpened(db: SqlExecutor, chapterId: number): Promise<void> {
+    await db.runAsync('UPDATE chapters SET updated_at = ? WHERE id = ?', [Date.now(), chapterId]);
   },
 
   async markDownloaded(

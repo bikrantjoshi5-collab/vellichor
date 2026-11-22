@@ -337,6 +337,11 @@ export default function LibraryScreen() {
                   </ThemedText>
                   <ThemedText variant="caption" numberOfLines={1}>
                     {continueNovel.last_chapter_name || `Chapter ${continueNovel.read_chapters + 1}`}
+                    {continueNovel.last_chapter_progress_pct &&
+                    continueNovel.last_chapter_progress_pct > 0 &&
+                    continueNovel.last_chapter_progress_pct < 100
+                      ? ` · ${Math.round(continueNovel.last_chapter_progress_pct)}%`
+                      : ''}
                   </ThemedText>
                   <ProgressBar
                     progress={
