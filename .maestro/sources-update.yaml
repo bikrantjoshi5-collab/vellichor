@@ -1,0 +1,18 @@
+appId: com.personal.vellichor
+tags:
+  - sources
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "app-loaded"
+    timeout: 15000
+- tapOn:
+    id: "tab-sources"
+- tapOn:
+    id: "sources-add-repo-btn"
+- assertVisible:
+    id: "repo-url-input"
+- assertVisible:
+    id: "repo-save-btn"
+- takeScreenshot: sources-add-repo

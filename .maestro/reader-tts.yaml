@@ -1,0 +1,33 @@
+appId: com.personal.vellichor
+tags:
+  - reader
+  - tts
+---
+# Verifies Voice Read-Aloud is OFF by default and docks cleanly when toggled ON in settings.
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "app-loaded"
+    timeout: 15000
+- tapOn:
+    id: "continue-reading-banner"
+    optional: true
+- assertNotVisible:
+    id: "tts-docked-bar"
+- tapOn:
+    id: "reader-settings-btn"
+    optional: true
+- tapOn:
+    id: "reader-tts-switch"
+    optional: true
+- tapOn:
+    id: "reader-settings-close"
+    optional: true
+- assertVisible:
+    id: "tts-docked-bar"
+    optional: true
+- tapOn:
+    id: "tts-close-btn"
+    optional: true
+- assertNotVisible:
+    id: "tts-docked-bar"

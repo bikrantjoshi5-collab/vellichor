@@ -1,0 +1,26 @@
+appId: com.personal.vellichor
+tags:
+  - ci
+  - smoke
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "app-loaded"
+    timeout: 15000
+- takeScreenshot: 01-library
+- tapOn:
+    id: "tab-updates"
+- assertVisible: "Updates"
+- takeScreenshot: 02-updates
+- tapOn:
+    id: "tab-sources"
+- assertVisible: "Sources"
+- takeScreenshot: 03-sources
+- tapOn:
+    id: "tab-more"
+- assertVisible: "More"
+- tapOn:
+    id: "more-queue-entry"
+- assertVisible: "Download Queue"
+- takeScreenshot: 04-queue
