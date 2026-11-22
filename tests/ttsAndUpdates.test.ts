@@ -33,7 +33,7 @@ describe('Non-intrusive docked TTS controller and weekly update scheduler', () =
     ];
 
     let chapterFinished = false;
-    const activeIndices: number[] = [];
+    const activeIndices: Array<number | null> = [];
     const tts = new TtsController(driver, {
       onActiveBlockChange: (idx) => activeIndices.push(idx),
       onChapterComplete: () => {
