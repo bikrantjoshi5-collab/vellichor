@@ -8,7 +8,8 @@
     "android": "expo run:android",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "lint:theme": "node scripts/check-theme-drift.js"
+    "lint:theme": "node scripts/check-theme-drift.js",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.2",

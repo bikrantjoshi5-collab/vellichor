@@ -1,7 +1,9 @@
 import { createPluginShims } from './shims';
+import { cloneFilters } from './filters';
 import type {
   FetchLike,
   PluginChapterItem,
+  PluginFilters,
   PluginInstance,
   PluginKeyValueStorage,
   PluginNovelItem,
@@ -83,17 +85,31 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
     releaseTime: raw.releaseTime ? String(raw.releaseTime) : null,
   });
 
+  const rawFilters =
+    exported.filters && typeof exported.filters === 'object'
+      ? cloneFilters(exported.filters as PluginFilters)
+      : undefined;
+
   return {
     id: String(exported.id ?? context.pluginId),
     name: String(exported.name ?? context.pluginId),
     site,
     version: String(exported.version ?? '1.0.0'),
     icon: exported.icon ? String(exported.icon) : undefined,
+    filters: rawFilters,
 
-    async popularNovels(pageNo: number, options?: Record<string, unknown>): Promise<PluginNovelItem[]> {
+    async popularNovels(
+      pageNo: number,
+      options?: { filters?: PluginFilters; showLatestNovels?: boolean; [k: string]: unknown }
+    ): Promise<PluginNovelItem[]> {
       if (typeof exported.popularNovels !== 'function') return [];
+      const mergedOptions = {
+        showLatestNovels: false,
+        ...(options ?? {}),
+        filters: options?.filters ?? cloneFilters(rawFilters),
+      };
       const res = await withTimeout(
-        Promise.resolve((exported.popularNovels as Function)(pageNo, options ?? {})),
+        Promise.resolve((exported.popularNovels as Function).call(exported, pageNo, mergedOptions)),
         timeoutMs,
         `${context.pluginId}.popularNovels`
       );
@@ -103,7 +119,7 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
     async searchNovels(searchTerm: string, pageNo: number): Promise<PluginNovelItem[]> {
       if (typeof exported.searchNovels !== 'function') return [];
       const res = await withTimeout(
-        Promise.resolve((exported.searchNovels as Function)(searchTerm, pageNo)),
+        Promise.resolve((exported.searchNovels as Function).call(exported, searchTerm, pageNo)),
         timeoutMs,
         `${context.pluginId}.searchNovels`
       );

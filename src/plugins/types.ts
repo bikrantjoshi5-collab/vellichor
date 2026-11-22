@@ -22,13 +22,36 @@ export interface PluginSourceNovel {
   chapters: PluginChapterItem[];
 }
 
+export interface FilterOption {
+  label: string;
+  value: string;
+}
+
+export interface ExcludableValue {
+  include?: string[];
+  exclude?: string[];
+}
+
+export interface PluginFilterItem {
+  type: string;
+  label: string;
+  value: string | boolean | string[] | ExcludableValue;
+  options?: FilterOption[];
+}
+
+export type PluginFilters = Record<string, PluginFilterItem>;
+
 export interface PluginInstance {
   id: string;
   name: string;
   site: string;
   version: string;
   icon?: string;
-  popularNovels(pageNo: number, options?: Record<string, unknown>): Promise<PluginNovelItem[]>;
+  filters?: PluginFilters;
+  popularNovels(
+    pageNo: number,
+    options?: { filters?: PluginFilters; showLatestNovels?: boolean; [k: string]: unknown }
+  ): Promise<PluginNovelItem[]>;
   searchNovels(searchTerm: string, pageNo: number): Promise<PluginNovelItem[]>;
   parseNovel(novelPath: string): Promise<PluginSourceNovel>;
   parseChapter(chapterPath: string): Promise<string>;
