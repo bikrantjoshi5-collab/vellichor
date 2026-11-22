@@ -11,7 +11,12 @@ const STATUS_TO_MAL: Record<ReadingStatus, string> = {
   dropped: 'dropped',
 };
 
-export function buildMalPkceAuthUrl(clientId: string, codeChallenge: string, redirectUri: string): string {
+export function buildMalPkceAuthUrl(
+  clientId: string,
+  codeChallenge: string,
+  redirectUri: string,
+  state?: string
+): string {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: clientId,
@@ -19,6 +24,7 @@ export function buildMalPkceAuthUrl(clientId: string, codeChallenge: string, red
     code_challenge_method: 'plain',
     redirect_uri: redirectUri,
   });
+  if (state) params.set('state', state);
   return `https://myanimelist.net/v1/oauth2/authorize?${params.toString()}`;
 }
 

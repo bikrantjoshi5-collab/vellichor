@@ -202,11 +202,17 @@ export default function MoreScreen() {
       }
       await trackerAuthStore.setClientId('mal', malClientId.trim());
       const verifier = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '').slice(0, 64);
-      const authUrl = buildMalPkceAuthUrl(malClientId.trim(), verifier, redirectUri);
+      const oauthState = Crypto.randomUUID().replace(/-/g, '');
+      const authUrl = buildMalPkceAuthUrl(malClientId.trim(), verifier, redirectUri, oauthState);
       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
       if (result.type === 'success' && result.url) {
         const queryPart = result.url.split('?')[1]?.split('#')[0] ?? '';
-        const code = new URLSearchParams(queryPart).get('code');
+        const params = new URLSearchParams(queryPart);
+        const returnedState = params.get('state');
+        if (returnedState !== oauthState) {
+          throw new Error('OAuth state mismatch — login rejected for your security');
+        }
+        const code = params.get('code');
         if (code) {
           const exchanged = await exchangeMalCodeForToken({
             clientId: malClientId.trim(),
@@ -316,12 +322,26 @@ export default function MoreScreen() {
               placeholderTextColor={mossColors.muted}
               style={styles.input}
             />
-            <Button
-              title={anilistConnected ? 'Reconnect AniList' : 'Connect AniList'}
-              variant={anilistConnected ? 'good' : 'secondary'}
-              size="sm"
-              onPress={() => void handleConnectAniList()}
-            />
+            <View style={styles.inlineForm}>
+              <Button
+                title={anilistConnected ? 'Reconnect AniList' : 'Connect AniList'}
+                variant={anilistConnected ? 'good' : 'secondary'}
+                size="sm"
+                onPress={() => void handleConnectAniList()}
+                style={{ flex: 1 }}
+              />
+              {anilistConnected ? (
+                <Button
+                  title="Disconnect"
+                  variant="ghost"
+                  size="sm"
+                  onPress={async () => {
+                    await trackerAuthStore.setToken('anilist', null);
+                    setAnilistConnected(false);
+                  }}
+                />
+              ) : null}
+            </View>
           </View>
 
           <View style={styles.trackerBox}>
@@ -335,12 +355,27 @@ export default function MoreScreen() {
               placeholderTextColor={mossColors.muted}
               style={styles.input}
             />
-            <Button
-              title={malConnected ? 'Reconnect MAL' : 'Connect MyAnimeList'}
-              variant={malConnected ? 'good' : 'secondary'}
-              size="sm"
-              onPress={() => void handleConnectMal()}
-            />
+            <View style={styles.inlineForm}>
+              <Button
+                title={malConnected ? 'Reconnect MAL' : 'Connect MyAnimeList'}
+                variant={malConnected ? 'good' : 'secondary'}
+                size="sm"
+                onPress={() => void handleConnectMal()}
+                style={{ flex: 1 }}
+              />
+              {malConnected ? (
+                <Button
+                  title="Disconnect"
+                  variant="ghost"
+                  size="sm"
+                  onPress={async () => {
+                    await trackerAuthStore.setToken('mal', null);
+                    await trackerAuthStore.setMalRefreshToken(null);
+                    setMalConnected(false);
+                  }}
+                />
+              ) : null}
+            </View>
           </View>
         </View>
 

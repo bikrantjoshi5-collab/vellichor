@@ -2,8 +2,9 @@
   "expo": {
     "name": "Vellichor",
     "slug": "vellichor",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "scheme": "vellichor",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0F1715",
@@ -11,8 +12,14 @@
     "android": {
       "package": "com.personal.vellichor",
       "adaptiveIcon": {
-        "backgroundColor": "#0F1715"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F1B17"
       },
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",
@@ -23,6 +30,7 @@
       ]
     },
     "plugins": [
+      "./plugins/withSecurityHardening",
       "expo-router",
       "expo-sqlite",
       "expo-font",

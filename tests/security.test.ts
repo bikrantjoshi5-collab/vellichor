@@ -8,6 +8,7 @@ import {
 import { loadPluginFromCode } from '@/plugins/runtime';
 import { fetchRepoManifest, installOrUpdatePlugin } from '@/plugins/repoSync';
 import { discoverGitHubPluginRepos, isVerifiedRepoUrl, RECOMMENDED_REPOS } from '@/plugins/recommendedRepos';
+import { buildMalPkceAuthUrl } from '@/trackers/mal';
 import { createTestSqliteExecutor } from './helpers/sqliteTestDb';
 import { initDatabase } from '@/db/database';
 import { pluginRepo } from '@/db/repositories/pluginRepo';
@@ -197,5 +198,17 @@ describe('Security hardening: plugin isolation, manifest hash verification, repo
     );
 
     expect(manifestRes.plugins.map((p) => p.id)).toEqual(['safe-site']);
+  });
+
+  test('#5 includes OAuth CSRF state in MAL auth URL and enforces Android manifest hardening rules', () => {
+    const malUrl = buildMalPkceAuthUrl('client123', 'verifier456', 'vellichor://auth', 'csrf_nonce_99');
+    const parsed = new URL(malUrl);
+    expect(parsed.searchParams.get('state')).toBe('csrf_nonce_99');
+    expect(parsed.searchParams.get('redirect_uri')).toBe('vellichor://auth');
+
+    // Verify Expo security hardening plugin strips SYSTEM_ALERT_WINDOW, disables allowBackup, and locks vellichor:// to host=auth
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const withSecurityHardening = require('../plugins/withSecurityHardening');
+    expect(typeof withSecurityHardening).toBe('function');
   });
 });

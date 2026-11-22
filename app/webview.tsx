@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -12,12 +12,17 @@ import { assertSafeExternalUrl } from '@/plugins/security';
 import { ThemedText } from '@/components/ThemedText';
 import { Button } from '@/components/Button';
 
-function sanitizeWebViewUrl(raw?: string): string {
-  if (!raw) return 'https://www.novelupdates.com';
+export function isHostAllowedForWebView(
+  candidateUrl: string,
+  allowedBaseHost: string
+): boolean {
   try {
-    return assertSafeExternalUrl(raw, 'WebView');
+    const safe = assertSafeExternalUrl(candidateUrl, 'WebView');
+    const host = new URL(safe).hostname.toLowerCase();
+    const base = allowedBaseHost.toLowerCase().replace(/^www\./, '');
+    return host === base || host.endsWith(`.${base}`);
   } catch {
-    return 'https://www.novelupdates.com';
+    return false;
   }
 }
 
@@ -30,19 +35,62 @@ export default function UtilityWebViewScreen() {
   }>();
   const router = useRouter();
   const db = useAppStore((s) => s.db);
+  const plugins = useAppStore((s) => s.plugins);
   const clearCloudflareSource = useAppStore((s) => s.clearCloudflareSource);
 
-  const safeInitialUrl = sanitizeWebViewUrl(url);
-  const [currentUrl, setCurrentUrl] = useState(safeInitialUrl);
-  const [pageTitle, setPageTitle] = useState(mode === 'novelupdates' ? 'NovelUpdates' : 'Verify Source');
+  // Strictly derive allowed initial URL & host from trusted in-app state (NEVER open arbitrary deep-link URLs!)
+  const resolvedTarget = useMemo<{ initialUrl: string; allowedHost: string } | null>(() => {
+    if (mode === 'novelupdates') {
+      const allowedHost = 'novelupdates.com';
+      if (url && isHostAllowedForWebView(url, allowedHost)) {
+        return { initialUrl: assertSafeExternalUrl(url, 'NovelUpdates'), allowedHost };
+      }
+      return { initialUrl: 'https://www.novelupdates.com', allowedHost };
+    }
+
+    if (mode === 'cloudflare' && pluginId) {
+      const installedPlugin = plugins.find((p) => p.id === pluginId && p.installed === 1 && p.site);
+      if (!installedPlugin) return null;
+      try {
+        const safeSite = assertSafeExternalUrl(installedPlugin.site, 'Cloudflare WebView');
+        const allowedHost = new URL(safeSite).hostname.toLowerCase();
+        return { initialUrl: safeSite, allowedHost };
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }, [mode, pluginId, url, plugins]);
+
+  useEffect(() => {
+    if (!resolvedTarget) {
+      router.replace('/(tabs)');
+    }
+  }, [resolvedTarget, router]);
+
+  const [currentUrl, setCurrentUrl] = useState(resolvedTarget?.initialUrl ?? '');
+  const [pageTitle, setPageTitle] = useState(
+    mode === 'novelupdates' ? 'NovelUpdates' : 'Verify Source'
+  );
+
+  if (!resolvedTarget) {
+    return null;
+  }
+
+  const isCloudflareMode = mode === 'cloudflare';
 
   const handlePrimaryAction = async () => {
-    if (mode === 'cloudflare' && pluginId) {
+    if (isCloudflareMode && pluginId) {
       await clearCloudflareSource(pluginId);
       router.back();
       return;
     }
     if (mode === 'novelupdates' && novelId && db) {
+      if (!isHostAllowedForWebView(currentUrl, 'novelupdates.com')) {
+        Alert.alert('Invalid Page', 'Navigate to a NovelUpdates series page before linking.');
+        return;
+      }
       const slug = currentUrl.replace(/\/$/, '').split('/').pop() || currentUrl;
       const cleanTitle = pageTitle.replace(/\s*[-|–]\s*Novel Updates.*$/i, '').trim() || slug;
       await trackerRepo.upsertLink(db, {
@@ -72,7 +120,7 @@ export default function UtilityWebViewScreen() {
             {currentUrl}
           </ThemedText>
         </View>
-        {mode === 'cloudflare' ? (
+        {isCloudflareMode ? (
           <Button title="Done" size="sm" onPress={() => void handlePrimaryAction()} />
         ) : mode === 'novelupdates' ? (
           <Button title="Link Series" size="sm" onPress={() => void handlePrimaryAction()} />
@@ -80,15 +128,23 @@ export default function UtilityWebViewScreen() {
       </View>
 
       <WebView
-        source={{ uri: safeInitialUrl }}
+        source={{ uri: resolvedTarget.initialUrl }}
         userAgent={DEFAULT_USER_AGENT}
         originWhitelist={['https://*', 'http://*']}
         allowFileAccess={false}
         allowUniversalAccessFromFileURLs={false}
         domStorageEnabled
-        sharedCookiesEnabled
-        thirdPartyCookiesEnabled
-        onShouldStartLoadWithRequest={(req) => /^https?:\/\//i.test(req.url)}
+        incognito={!isCloudflareMode}
+        sharedCookiesEnabled={isCloudflareMode}
+        thirdPartyCookiesEnabled={false}
+        onShouldStartLoadWithRequest={(req) => {
+          // Allow only the target site's domain (plus Cloudflare challenge domain in Cloudflare mode)
+          if (isHostAllowedForWebView(req.url, resolvedTarget.allowedHost)) return true;
+          if (isCloudflareMode && isHostAllowedForWebView(req.url, 'challenges.cloudflare.com')) {
+            return true;
+          }
+          return false;
+        }}
         onNavigationStateChange={(nav) => {
           if (nav.url && /^https?:\/\//i.test(nav.url)) setCurrentUrl(nav.url);
           if (nav.title) setPageTitle(nav.title);
