@@ -2,7 +2,7 @@
   "expo": {
     "name": "Vellichor",
     "slug": "vellichor",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "scheme": "vellichor",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
@@ -11,6 +11,7 @@
     "newArchEnabled": true,
     "android": {
       "package": "com.personal.vellichor",
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F1B17"
