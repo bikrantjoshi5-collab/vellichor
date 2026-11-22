@@ -118,9 +118,11 @@ export default function NovelDetailScreen() {
     }
   };
 
+  const ascChapters = descOrder ? [...chapters].reverse() : chapters;
+
   const queueBatch = (mode: 'next10' | 'next50' | 'unread') => {
     if (!novel) return;
-    const unread = chapters.filter((c) => c.is_read === 0 && c.is_downloaded === 0);
+    const unread = ascChapters.filter((c) => c.is_read === 0 && c.is_downloaded === 0);
     const slice = mode === 'next10' ? unread.slice(0, 10) : mode === 'next50' ? unread.slice(0, 50) : unread;
     if (slice.length === 0) {
       Alert.alert('Nothing to Download', 'All matching chapters are already downloaded.');
@@ -142,11 +144,11 @@ export default function NovelDetailScreen() {
     );
   }
 
-  // Smartly resume the exact in-progress chapter (or most recently opened chapter), else start next unread
+  // Smartly resume the exact in-progress chapter (always in ascending reading order, even if UI shows Newest first)
   const resumeChapter =
-    chapters.find((c) => c.read_progress_pct > 0 && c.read_progress_pct < 92) ??
-    chapters.find((c) => c.is_read === 0) ??
-    chapters[0] ??
+    ascChapters.find((c) => c.read_progress_pct > 0 && c.read_progress_pct < 92) ??
+    ascChapters.find((c) => c.is_read === 0) ??
+    ascChapters[0] ??
     null;
 
   const resumeLabel =

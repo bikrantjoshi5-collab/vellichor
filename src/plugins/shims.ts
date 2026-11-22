@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio/slim';
 import * as htmlparser2 from 'htmlparser2';
 import dayjs from 'dayjs';
 import { PluginHttpError, type FetchLike, type PluginKeyValueStorage } from './types';
+import { assertSafeExternalUrl } from './security';
 
 export const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
@@ -51,11 +52,12 @@ export function createPluginShims(opts: {
     url: string,
     init?: { method?: string; headers?: Record<string, string>; body?: string }
   ) => {
+    const safeUrl = assertSafeExternalUrl(url, 'plugin fetch', { blockTrackerApis: true });
     const mergedHeaders: Record<string, string> = {
       'User-Agent': userAgent,
       ...(init?.headers ?? {}),
     };
-    const res = await rawFetch(url, { ...init, headers: mergedHeaders });
+    const res = await rawFetch(safeUrl, { ...init, headers: mergedHeaders });
     if (!res.ok) {
       if (res.status === 429) {
         throw new PluginHttpError(`Rate limited (HTTP 429) on ${url}`, 429, false);

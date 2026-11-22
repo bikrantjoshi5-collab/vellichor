@@ -1,6 +1,12 @@
 import type { SqlExecutor } from '@/db/types';
 import { pluginRepo } from '@/db/repositories/pluginRepo';
 import { hashBundleCode } from './semver';
+import {
+  assertSafeExternalUrl,
+  assertSafePluginId,
+  auditPluginCode,
+  verifyBundleIntegrity,
+} from './security';
 import type { FetchLike, NormalizedManifestPlugin, RawManifestPlugin } from './types';
 
 function defaultFetch(): FetchLike {
@@ -63,11 +69,30 @@ export async function fetchRepoManifest(
   const plugins: NormalizedManifestPlugin[] = [];
   for (const item of rawList) {
     if (!item?.id || !item?.name) continue;
+    let safeId: string;
+    try {
+      safeId = assertSafePluginId(String(item.id));
+    } catch {
+      continue;
+    }
     const fileUrl = resolveRepoAssetUrl(repoUrl, item.url ?? item.file);
     if (!fileUrl) continue;
-    const iconUrl = resolveRepoAssetUrl(repoUrl, item.iconUrl ?? item.icon ?? null);
+    try {
+      assertSafeExternalUrl(fileUrl, `plugin "${safeId}" bundle URL`);
+    } catch {
+      continue;
+    }
+    const rawIconUrl = resolveRepoAssetUrl(repoUrl, item.iconUrl ?? item.icon ?? null);
+    let iconUrl: string | null = null;
+    if (rawIconUrl) {
+      try {
+        iconUrl = assertSafeExternalUrl(rawIconUrl, `plugin "${safeId}" icon URL`);
+      } catch {
+        iconUrl = null;
+      }
+    }
     plugins.push({
-      id: String(item.id),
+      id: safeId,
       name: String(item.name),
       version: String(item.version ?? '1.0.0'),
       lang: String(item.lang ?? 'English'),
@@ -148,11 +173,13 @@ export async function installOrUpdatePlugin(
   bundleStore: PluginBundleStore,
   opts: { fetchImpl?: FetchLike; nowMs?: number } = {}
 ): Promise<{ version: string; bundleHash: string; localPath: string }> {
-  const row = await pluginRepo.getPluginById(db, pluginId);
-  if (!row) throw new Error(`Plugin "${pluginId}" not found in any repo`);
+  const safeId = assertSafePluginId(pluginId);
+  const row = await pluginRepo.getPluginById(db, safeId);
+  if (!row) throw new Error(`Plugin "${safeId}" not found in any repo`);
 
   const fetchImpl = opts.fetchImpl ?? defaultFetch();
-  const bustedUrl = appendCacheBuster(row.file_url, opts.nowMs ?? Date.now());
+  const safeFileUrl = assertSafeExternalUrl(row.file_url, `plugin "${safeId}" download`);
+  const bustedUrl = appendCacheBuster(safeFileUrl, opts.nowMs ?? Date.now());
   const res = await fetchImpl(bustedUrl, {
     method: 'GET',
     headers: {
@@ -164,9 +191,12 @@ export async function installOrUpdatePlugin(
     throw new Error(`Failed to download plugin bundle (HTTP ${res.status})`);
   }
   const code = await res.text();
+  // Verify manifest hash integrity AND static security audit BEFORE writing to disk or activating.
+  await verifyBundleIntegrity(code, row.remote_hash, safeId);
+  auditPluginCode(code, safeId);
   const bundleHash = hashBundleCode(code);
   const etag = res.headers?.get('etag') ?? res.headers?.get('last-modified') ?? row.remote_etag ?? null;
-  const localPath = await bundleStore.writeBundle(pluginId, code);
+  const localPath = await bundleStore.writeBundle(safeId, code);
 
   await pluginRepo.markPluginInstalled(db, pluginId, {
     version: row.remote_version || row.version || '1.0.0',

@@ -55,7 +55,7 @@ export default function RootLayout() {
   const bootstrap = useAppStore((s) => s.bootstrap);
   const ready = useAppStore((s) => s.ready);
 
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     Lora_400Regular,
     Lora_400Regular_Italic,
     Lora_500Medium,
@@ -74,7 +74,7 @@ export default function RootLayout() {
     void bootstrap();
   }, [bootstrap]);
 
-  if (!fontsLoaded || !ready) {
+  if ((!fontsLoaded && !fontError) || !ready) {
     return (
       <View style={styles.splash}>
         <StatusBar barStyle="light-content" backgroundColor={mossColors.bg} />

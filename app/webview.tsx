@@ -8,8 +8,18 @@ import { mossColors, radius, spacing } from '@/theme';
 import { useAppStore } from '@/store/appStore';
 import { trackerRepo } from '@/db/repositories/trackerRepo';
 import { DEFAULT_USER_AGENT } from '@/plugins/shims';
+import { assertSafeExternalUrl } from '@/plugins/security';
 import { ThemedText } from '@/components/ThemedText';
 import { Button } from '@/components/Button';
+
+function sanitizeWebViewUrl(raw?: string): string {
+  if (!raw) return 'https://www.novelupdates.com';
+  try {
+    return assertSafeExternalUrl(raw, 'WebView');
+  } catch {
+    return 'https://www.novelupdates.com';
+  }
+}
 
 export default function UtilityWebViewScreen() {
   const { mode, pluginId, novelId, url } = useLocalSearchParams<{
@@ -22,7 +32,8 @@ export default function UtilityWebViewScreen() {
   const db = useAppStore((s) => s.db);
   const clearCloudflareSource = useAppStore((s) => s.clearCloudflareSource);
 
-  const [currentUrl, setCurrentUrl] = useState(url || 'https://www.novelupdates.com');
+  const safeInitialUrl = sanitizeWebViewUrl(url);
+  const [currentUrl, setCurrentUrl] = useState(safeInitialUrl);
   const [pageTitle, setPageTitle] = useState(mode === 'novelupdates' ? 'NovelUpdates' : 'Verify Source');
 
   const handlePrimaryAction = async () => {
@@ -69,13 +80,17 @@ export default function UtilityWebViewScreen() {
       </View>
 
       <WebView
-        source={{ uri: url || 'https://www.novelupdates.com' }}
+        source={{ uri: safeInitialUrl }}
         userAgent={DEFAULT_USER_AGENT}
+        originWhitelist={['https://*', 'http://*']}
+        allowFileAccess={false}
+        allowUniversalAccessFromFileURLs={false}
         domStorageEnabled
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
+        onShouldStartLoadWithRequest={(req) => /^https?:\/\//i.test(req.url)}
         onNavigationStateChange={(nav) => {
-          if (nav.url) setCurrentUrl(nav.url);
+          if (nav.url && /^https?:\/\//i.test(nav.url)) setCurrentUrl(nav.url);
           if (nav.title) setPageTitle(nav.title);
         }}
         style={styles.webview}

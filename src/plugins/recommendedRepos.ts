@@ -5,6 +5,7 @@ export interface RecommendedRepo {
   url: string;
   description: string;
   badge: string;
+  verified: boolean;
 }
 
 export const RECOMMENDED_REPOS: RecommendedRepo[] = [
@@ -12,21 +13,32 @@ export const RECOMMENDED_REPOS: RecommendedRepo[] = [
     name: 'LNReader Official Plugins',
     url: 'https://raw.githubusercontent.com/LNReader/lnreader-plugins/plugins/v3.0.0/.dist/plugins.min.json',
     description: '370+ curated sources (Royal Road, Scribble Hub, WTR-LAB, Ranobes, LightNovelWorld & more).',
-    badge: 'Official · 373 sites',
+    badge: 'Official · Verified',
+    verified: true,
   },
   {
     name: 'Nekori Community Plugins',
     url: 'https://raw.githubusercontent.com/Yuneko-dev/Nekori-plugins/plugins/v3.0.0/.dist/plugins.min.json',
     description: 'Community-maintained LNReader v3-compatible fork with extra and updated webnovel sources.',
-    badge: 'Community',
+    badge: 'Unverified · Community',
+    verified: false,
   },
   {
     name: 'Tausif LNReader Plugins',
     url: 'https://raw.githubusercontent.com/Tausif-Husain/LNreader-Plugins/plugins/v3.0.0/.dist/plugins.min.json',
     description: 'Community fork hosting LNReader v3.0.0 plugin bundles.',
-    badge: 'Community Fork',
+    badge: 'Unverified · Community Fork',
+    verified: false,
   },
 ];
+
+const VERIFIED_REPO_URLS = new Set(
+  RECOMMENDED_REPOS.filter((r) => r.verified).map((r) => r.url.trim())
+);
+
+export function isVerifiedRepoUrl(url: string): boolean {
+  return VERIFIED_REPO_URLS.has(url.trim());
+}
 
 const CANDIDATE_MANIFEST_PATHS = [
   'plugins/v3.0.0/.dist/plugins.min.json',
@@ -74,8 +86,9 @@ export async function discoverGitHubPluginRepos(
           verified.push({
             name: item.full_name,
             url: candidateUrl,
-            description: item.description?.trim() || 'LNReader-compatible GitHub plugin repository',
-            badge: `★ ${item.stargazers_count ?? 0}`,
+            description: item.description?.trim() || 'Unverified GitHub repository — review before trusting',
+            badge: `Unverified · ★ ${item.stargazers_count ?? 0}`,
+            verified: false,
           });
           break;
         }

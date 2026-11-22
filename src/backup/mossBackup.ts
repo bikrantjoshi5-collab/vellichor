@@ -21,7 +21,7 @@ export interface MossBackupPayload {
   app: 'Vellichor';
   exportedAt: string;
   repos: Array<{ url: string; name: string }>;
-  shelves: Array<{ name: string; sortOrder: number }>;
+  shelves: Array<{ name: string; colorToken?: string; sortOrder: number }>;
   novels: Array<{
     pluginId: string;
     path: string;
@@ -43,6 +43,7 @@ export interface MossBackupPayload {
       isRead: boolean;
       readProgressPct: number;
       scrollParagraphIdx: number;
+      scrollOffsetY?: number;
     }>;
     trackers: Array<{
       provider: TrackerProvider;
@@ -92,6 +93,7 @@ export async function exportMossBackup(db: SqlExecutor): Promise<string> {
         isRead: c.is_read === 1,
         readProgressPct: c.read_progress_pct,
         scrollParagraphIdx: c.scroll_paragraph_idx,
+        scrollOffsetY: c.scroll_offset_y ?? 0,
       })),
       trackers: trackers.map((t) => ({
         provider: t.provider,
@@ -112,7 +114,11 @@ export async function exportMossBackup(db: SqlExecutor): Promise<string> {
     app: 'Vellichor',
     exportedAt: new Date().toISOString(),
     repos: repos.map((r) => ({ url: r.url, name: r.name })),
-    shelves: shelves.map((s) => ({ name: s.name, sortOrder: s.sort_order })),
+    shelves: shelves.map((s) => ({
+      name: s.name,
+      colorToken: s.color_token || 'terracotta',
+      sortOrder: s.sort_order,
+    })),
     novels: novelEntries,
     settings,
   };
@@ -140,7 +146,7 @@ export async function importMossBackup(
   let shelvesImported = 0;
   for (const s of payload.shelves ?? []) {
     if (!s?.name) continue;
-    const row = await libraryRepo.createShelf(db, s.name);
+    const row = await libraryRepo.createShelf(db, s.name, s.colorToken || 'terracotta');
     shelfMap.set(row.name, row.id);
     shelvesImported++;
   }

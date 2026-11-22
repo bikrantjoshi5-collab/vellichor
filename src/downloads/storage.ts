@@ -1,4 +1,5 @@
 import type { PluginBundleStore } from '@/plugins/repoSync';
+import { assertSafePluginId } from '@/plugins/security';
 import type { AssetFileStore } from './downloadEngine';
 
 function getExpoFs() {
@@ -65,10 +66,11 @@ export function createExpoAssetStore(): AssetFileStore {
 export function createExpoPluginBundleStore(): PluginBundleStore {
   return {
     async writeBundle(pluginId, code) {
+      const safeId = assertSafePluginId(pluginId);
       const FileSystem = getExpoFs();
       const dir = `${FileSystem.documentDirectory}plugins`;
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-      const filePath = `${dir}/${pluginId}.js`;
+      const filePath = `${dir}/${safeId}.js`;
       await FileSystem.writeAsStringAsync(filePath, code);
       return filePath;
     },

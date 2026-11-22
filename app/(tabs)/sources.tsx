@@ -28,6 +28,7 @@ import { useAppStore } from '@/store/appStore';
 import { detectPluginUpdate } from '@/plugins/semver';
 import {
   discoverGitHubPluginRepos,
+  isVerifiedRepoUrl,
   RECOMMENDED_REPOS,
   type RecommendedRepo,
 } from '@/plugins/recommendedRepos';
@@ -111,6 +112,29 @@ export default function SourcesScreen() {
   }, [plugins, catalogFilter]);
 
   const connectedRepoUrls = useMemo(() => new Set(repos.map((r) => r.url.trim())), [repos]);
+
+  const confirmAndAddRepo = (url: string, name?: string) => {
+    const cleanUrl = url.trim();
+    if (!cleanUrl) return;
+    if (isVerifiedRepoUrl(cleanUrl)) {
+      void addRepoUrl(cleanUrl, name);
+      return;
+    }
+    Alert.alert(
+      'Unverified Repository Warning',
+      `Extensions execute JavaScript inside Vellichor. GitHub stars can be faked, and this repository has not been audited.\n\nOnly add "${name || cleanUrl}" if you personally trust its author.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add Anyway',
+          style: 'destructive',
+          onPress: () => {
+            void addRepoUrl(cleanUrl, name);
+          },
+        },
+      ]
+    );
+  };
 
   const handleInstallOrUpdate = async (pluginId: string) => {
     setBusyPluginId(pluginId);
@@ -559,9 +583,9 @@ export default function SourcesScreen() {
                       title="Add & Sync Repo"
                       size="sm"
                       loading={syncingRepos}
-                      onPress={async () => {
+                      onPress={() => {
                         if (!repoInput.trim()) return;
-                        await addRepoUrl(repoInput.trim());
+                        confirmAndAddRepo(repoInput.trim());
                         setRepoInput('');
                         setShowCustomRepo(false);
                       }}
@@ -591,17 +615,20 @@ export default function SourcesScreen() {
                         <ThemedText variant="caption" numberOfLines={2}>
                           {rec.description}
                         </ThemedText>
-                        <ThemedText variant="mono" style={{ color: mossColors.good }}>
+                        <ThemedText
+                          variant="mono"
+                          style={{ color: rec.verified ? mossColors.good : mossColors.warn }}
+                        >
                           {rec.badge}
                         </ThemedText>
                       </View>
                       <Button
                         title={isAdded ? 'Added' : 'Add Repo'}
-                        variant={isAdded ? 'good' : 'primary'}
+                        variant={isAdded ? 'good' : rec.verified ? 'primary' : 'secondary'}
                         size="sm"
                         disabled={isAdded}
                         loading={syncingRepos && !isAdded}
-                        onPress={() => void addRepoUrl(rec.url, rec.name)}
+                        onPress={() => confirmAndAddRepo(rec.url, rec.name)}
                       />
                     </View>
                   );

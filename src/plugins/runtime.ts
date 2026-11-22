@@ -1,5 +1,6 @@
 import { createPluginShims } from './shims';
 import { cloneFilters } from './filters';
+import { assertSafePluginId, auditPluginCode } from './security';
 import type {
   FetchLike,
   PluginChapterItem,
@@ -48,6 +49,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export function loadPluginFromCode(code: string, context: LoadPluginContext): PluginInstance {
+  const safeId = assertSafePluginId(context.pluginId);
+  auditPluginCode(code, safeId);
+
   const shims = createPluginShims({
     fetchImpl: context.fetchImpl,
     storage: context.storage ?? createEphemeralStorage(),
@@ -57,16 +61,60 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
     if (Object.prototype.hasOwnProperty.call(shims, moduleName)) {
       return shims[moduleName];
     }
-    throw new Error(`Unsupported module "${moduleName}" requested by plugin "${context.pluginId}"`);
+    throw new Error(`Unsupported module "${moduleName}" requested by plugin "${safeId}"`);
   };
 
+  const fetchShim = (shims['@libs/fetch'] as { fetchApi: FetchLike }).fetchApi;
+  const safeGlobal = Object.freeze({});
   const moduleObj: { exports: Record<string, unknown> } = { exports: {} };
-  const runner = new Function('require', 'exports', 'module', code);
-  runner(sandboxRequire, moduleObj.exports, moduleObj);
+
+  // Hardened strict scope: shadows native bridges, raw globals, Metro internals, and raw fetch.
+  const runner = new Function(
+    'require',
+    'exports',
+    'module',
+    'fetch',
+    'globalThis',
+    'global',
+    'window',
+    'self',
+    'XMLHttpRequest',
+    'WebSocket',
+    'expo',
+    'NativeModules',
+    '__turboModuleProxy',
+    'nativeModuleProxy',
+    '__r',
+    '__d',
+    'process',
+    'Function',
+    `'use strict';\n${code}`
+  );
+
+  runner(
+    sandboxRequire,
+    moduleObj.exports,
+    moduleObj,
+    fetchShim,
+    safeGlobal,
+    safeGlobal,
+    safeGlobal,
+    safeGlobal,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined
+  );
 
   const exported = (moduleObj.exports?.default ?? moduleObj.exports) as Record<string, unknown>;
   if (!exported || typeof exported !== 'object') {
-    throw new Error(`Plugin "${context.pluginId}" did not export a valid plugin instance`);
+    throw new Error(`Plugin "${safeId}" did not export a valid plugin instance`);
   }
 
   const timeoutMs = context.timeoutMs ?? 25_000;
@@ -91,8 +139,8 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
       : undefined;
 
   return {
-    id: String(exported.id ?? context.pluginId),
-    name: String(exported.name ?? context.pluginId),
+    id: String(exported.id ?? safeId),
+    name: String(exported.name ?? safeId),
     site,
     version: String(exported.version ?? '1.0.0'),
     icon: exported.icon ? String(exported.icon) : undefined,
@@ -111,7 +159,7 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
       const res = await withTimeout(
         Promise.resolve((exported.popularNovels as Function).call(exported, pageNo, mergedOptions)),
         timeoutMs,
-        `${context.pluginId}.popularNovels`
+        `${safeId}.popularNovels`
       );
       return Array.isArray(res) ? res.map((x) => normalizeNovelItem(x as Record<string, unknown>)) : [];
     },
@@ -121,7 +169,7 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
       const res = await withTimeout(
         Promise.resolve((exported.searchNovels as Function).call(exported, searchTerm, pageNo)),
         timeoutMs,
-        `${context.pluginId}.searchNovels`
+        `${safeId}.searchNovels`
       );
       return Array.isArray(res) ? res.map((x) => normalizeNovelItem(x as Record<string, unknown>)) : [];
     },
@@ -129,12 +177,12 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
     async parseNovel(novelPath: string): Promise<PluginSourceNovel> {
       const fn = (exported.parseNovel ?? exported.parseNovelAndChapters) as Function | undefined;
       if (typeof fn !== 'function') {
-        throw new Error(`Plugin "${context.pluginId}" does not implement parseNovel`);
+        throw new Error(`Plugin "${safeId}" does not implement parseNovel`);
       }
       const raw = (await withTimeout(
         Promise.resolve(fn.call(exported, novelPath)),
         timeoutMs,
-        `${context.pluginId}.parseNovel`
+        `${safeId}.parseNovel`
       )) as Record<string, unknown>;
       const rawChapters = Array.isArray(raw.chapters) ? raw.chapters : [];
       return {
@@ -151,19 +199,19 @@ export function loadPluginFromCode(code: string, context: LoadPluginContext): Pl
 
     async parseChapter(chapterPath: string): Promise<string> {
       if (typeof exported.parseChapter !== 'function') {
-        throw new Error(`Plugin "${context.pluginId}" does not implement parseChapter`);
+        throw new Error(`Plugin "${safeId}" does not implement parseChapter`);
       }
       const html = await withTimeout(
-        Promise.resolve((exported.parseChapter as Function)(chapterPath)),
+        Promise.resolve((exported.parseChapter as Function).call(exported, chapterPath)),
         timeoutMs,
-        `${context.pluginId}.parseChapter`
+        `${safeId}.parseChapter`
       );
       return String(html ?? '');
     },
 
     resolveUrl(path: string, isNovel?: boolean): string {
       if (typeof exported.resolveUrl === 'function') {
-        return String((exported.resolveUrl as Function)(path, isNovel));
+        return String((exported.resolveUrl as Function).call(exported, path, isNovel));
       }
       if (/^https?:\/\//i.test(path)) return path;
       return `${site.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
