@@ -6,6 +6,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   android-apk:
     runs-on: ubuntu-latest
@@ -37,10 +40,23 @@ jobs:
       - name: Build release APK
         run: |
           cd android
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+
+      - name: Rename APK for download
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME:-latest}"
+          cp android/app/build/outputs/apk/release/app-release.apk "vellichor-${TAG_NAME}.apk"
 
       - name: Upload sideloadable APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: vellichor-android-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: vellichor-*.apk
+
+      - name: Publish GitHub Release with direct APK download
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Vellichor ${{ github.ref_name }}
+          generate_release_notes: true
+          files: vellichor-*.apk
