@@ -71,6 +71,7 @@ export default function UtilityWebViewScreen() {
       <WebView
         source={{ uri: url || 'https://www.novelupdates.com' }}
         userAgent={DEFAULT_USER_AGENT}
+        domStorageEnabled
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         onNavigationStateChange={(nav) => {

@@ -1,4 +1,4 @@
-import * as cheerio from 'cheerio';
+import * as cheerio from 'cheerio/slim';
 
 export type ChapterBlock =
   | { type: 'heading'; text: string }
@@ -19,8 +19,39 @@ function resolveImageUrl(src: string, baseUrl?: string): string {
   }
 }
 
-function cleanText(raw: string): string {
-  return raw.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+function pickImageSource($img: cheerio.Cheerio<any>): string | null {
+  const candidates = [
+    $img.attr('data-src'),
+    $img.attr('data-lazy-src'),
+    $img.attr('data-original'),
+    $img.attr('src'),
+  ];
+  for (const c of candidates) {
+    if (!c) continue;
+    const trimmed = c.trim();
+    if (!trimmed) continue;
+    // Skip 1x1 lazy-load placeholder gifs if another candidate exists
+    if (/^data:image\/gif/i.test(trimmed) || /loading\.gif|placeholder/i.test(trimmed)) {
+      continue;
+    }
+    return trimmed;
+  }
+  return $img.attr('src')?.trim() || null;
+}
+
+function cleanLine(raw: string): string {
+  return raw.replace(/\u00a0/g, ' ').replace(/[ \t\r]+/g, ' ').trim();
+}
+
+function extractLinesWithBr($: cheerio.CheerioAPI, $el: cheerio.Cheerio<any>): string[] {
+  const clone = $el.clone();
+  clone.find('img').remove();
+  clone.find('br').replaceWith('\n');
+  return clone
+    .text()
+    .split(/\n+/)
+    .map(cleanLine)
+    .filter((line) => line.length > 0);
 }
 
 export function parseChapterHtml(html: string, baseUrl?: string): ChapterBlock[] {
@@ -31,17 +62,17 @@ export function parseChapterHtml(html: string, baseUrl?: string): ChapterBlock[]
   const blocks: ChapterBlock[] = [];
   const root = $('#__root__');
 
-  const emitImagesIn = (el: cheerio.Cheerio<any>) => {
-    el.find('img').each((_, img) => {
-      const src = $(img).attr('src') || $(img).attr('data-src') || $(img).attr('data-lazy-src');
-      if (src && src.trim()) {
-        const alt = $(img).attr('alt')?.trim();
-        const block: ChapterBlock = {
+  const emitImagesIn = ($el: cheerio.Cheerio<any>) => {
+    $el.find('img').each((_, img) => {
+      const $img = $(img);
+      const src = pickImageSource($img);
+      if (src) {
+        const alt = $img.attr('alt')?.trim();
+        blocks.push({
           type: 'image',
           uri: resolveImageUrl(src, baseUrl),
           ...(alt ? { alt } : {}),
-        };
-        blocks.push(block);
+        });
       }
     });
   };
@@ -49,7 +80,7 @@ export function parseChapterHtml(html: string, baseUrl?: string): ChapterBlock[]
   const walk = (container: cheerio.Cheerio<any>) => {
     container.contents().each((_, node) => {
       if (node.type === 'text') {
-        const txt = cleanText((node as { data?: string }).data ?? '');
+        const txt = cleanLine((node as { data?: string }).data ?? '');
         if (txt) blocks.push({ type: 'paragraph', text: txt });
         return;
       }
@@ -63,9 +94,13 @@ export function parseChapterHtml(html: string, baseUrl?: string): ChapterBlock[]
         return;
       }
 
+      if (tag === 'br') {
+        return;
+      }
+
       if (tag === 'img') {
-        const src = $el.attr('src') || $el.attr('data-src') || $el.attr('data-lazy-src');
-        if (src && src.trim()) {
+        const src = pickImageSource($el);
+        if (src) {
           const alt = $el.attr('alt')?.trim();
           blocks.push({
             type: 'image',
@@ -77,35 +112,42 @@ export function parseChapterHtml(html: string, baseUrl?: string): ChapterBlock[]
       }
 
       if (/^h[1-6]$/.test(tag)) {
-        const txt = cleanText($el.text());
+        const txt = cleanLine($el.text());
         if (txt) blocks.push({ type: 'heading', text: txt });
         return;
       }
 
       if (tag === 'blockquote') {
-        const txt = cleanText($el.text());
-        if (txt) blocks.push({ type: 'blockquote', text: txt });
+        const lines = extractLinesWithBr($, $el);
+        for (const line of lines) {
+          blocks.push({ type: 'blockquote', text: line });
+        }
         emitImagesIn($el);
         return;
       }
 
       if (tag === 'p' || tag === 'li') {
-        // Emit any images inside the paragraph, plus its text if non-empty.
-        const clone = $el.clone();
-        clone.find('img').remove();
-        const txt = cleanText(clone.text());
-        if (txt) blocks.push({ type: 'paragraph', text: txt });
+        const lines = extractLinesWithBr($, $el);
+        for (const line of lines) {
+          blocks.push({ type: 'paragraph', text: line });
+        }
         emitImagesIn($el);
         return;
       }
 
-      // Container tags (div, section, article, span, etc.) recurse cleanly
-      const hasBlockChildren = $el.children('p, div, h1, h2, h3, h4, h5, h6, blockquote, hr, ul, ol, section, article, figure, img').length > 0;
-      if (hasBlockChildren) {
+      // Recurse into any wrapper element containing block children OR nested <img> (e.g. <div><a><img/></a></div>, <center><img/></center>)
+      const hasStructuredChildren =
+        $el.children('p, div, h1, h2, h3, h4, h5, h6, blockquote, hr, ul, ol, section, article, figure, center, a, span, img').length > 0 &&
+        ($el.find('img').length > 0 ||
+          $el.children('p, div, h1, h2, h3, h4, h5, h6, blockquote, hr, ul, ol, section, article, figure, center').length > 0);
+
+      if (hasStructuredChildren) {
         walk($el);
       } else {
-        const txt = cleanText($el.text());
-        if (txt) blocks.push({ type: 'paragraph', text: txt });
+        const lines = extractLinesWithBr($, $el);
+        for (const line of lines) {
+          blocks.push({ type: 'paragraph', text: line });
+        }
       }
     });
   };

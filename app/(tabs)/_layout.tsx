@@ -15,7 +15,10 @@ export default function TabsLayout() {
         installedVersion: p.version,
         remoteVersion: p.remote_version,
         installedHash: p.bundle_hash,
+        installedManifestHash: p.installed_manifest_hash,
         remoteHash: p.remote_hash,
+        installedEtag: p.installed_etag,
+        remoteEtag: p.remote_etag,
       }).hasUpdate
   ).length;
 

@@ -5,7 +5,13 @@ import { libraryRepo } from '@/db/repositories/libraryRepo';
 import { chapterRepo } from '@/db/repositories/chapterRepo';
 import { pluginRepo } from '@/db/repositories/pluginRepo';
 import { trackerRepo } from '@/db/repositories/trackerRepo';
-import { applyChapterOffset, resolveSyncAction, syncTrackerProgress } from '@/trackers/syncService';
+import {
+  applyChapterOffset,
+  flushPendingTrackerSyncs,
+  pullRemoteProgressToLocal,
+  resolveSyncAction,
+  syncTrackerProgress,
+} from '@/trackers/syncService';
 import { exportMossBackup, importMossBackup } from '@/backup/mossBackup';
 import { previewLnReaderZip, importLnReaderZip } from '@/backup/lnreaderImport';
 
@@ -159,6 +165,94 @@ describe('Tracker sync, Moss JSON backup/restore, and LNReader .zip migration', 
       const chs = await chapterRepo.listByNovel(db, novels[0].id);
       expect(chs.find((c) => c.chapter_number === 1)?.is_read).toBe(1);
       expect(chs.find((c) => c.chapter_number === 2)?.is_read).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('imports modern LNReader v2 nested data.zip + NovelAndChapters/*.json and survives malformed JSON (Critical #4)', async () => {
+    const inner = new JSZip();
+    inner.file(
+      'NovelAndChapters/42.json',
+      JSON.stringify({
+        id: 42,
+        pluginId: 'novelbin',
+        path: '/lotm',
+        name: 'Lord of the Mysteries',
+        author: 'Cuttlefish',
+        inLibrary: true,
+        chapters: [
+          { path: '/lotm/1', name: 'Ch 1', chapterNumber: 1, unread: false },
+          { path: '/lotm/2', name: 'Ch 2', chapterNumber: 2, unread: true },
+        ],
+      })
+    );
+    inner.file('Category.json', JSON.stringify({ malformed: true })); // non-array malformed JSON!
+    const innerBytes = await inner.generateAsync({ type: 'uint8array' });
+
+    const outer = new JSZip();
+    outer.file('data.zip', innerBytes);
+    const outerBytes = await outer.generateAsync({ type: 'uint8array' });
+
+    const preview = await previewLnReaderZip(outerBytes);
+    expect(preview.novelsCount).toBe(1);
+    expect(preview.chaptersCount).toBe(2);
+
+    const db = createTestSqliteExecutor();
+    try {
+      await initDatabase(db);
+      const res = await importLnReaderZip(db, outerBytes);
+      expect(res.novelsImported).toBe(1);
+      expect(res.chaptersImported).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('persists pending chapter on offline tracker failure, flushes on reconnect, and supports Pull Remote Progress (Critical #5)', async () => {
+    const db = createTestSqliteExecutor();
+    try {
+      await initDatabase(db);
+      const novelId = await libraryRepo.upsertNovel(db, {
+        pluginId: 'novelbin',
+        path: '/orv',
+        title: 'ORV',
+        inLibrary: true,
+      });
+      await chapterRepo.upsertChapters(db, novelId, [
+        { path: '/c/1', name: 'Ch 1', chapterNumber: 1, discoveredAt: 1 },
+        { path: '/c/2', name: 'Ch 2', chapterNumber: 2, discoveredAt: 2 },
+        { path: '/c/3', name: 'Ch 3', chapterNumber: 3, discoveredAt: 3 },
+      ]);
+      await trackerRepo.upsertLink(db, {
+        novelId,
+        provider: 'anilist',
+        remoteId: '101',
+        remoteTitle: 'ORV',
+        status: 'reading',
+        lastChapterSynced: 0,
+      });
+
+      // Pull remote progress = 2 marks chapters 1 and 2 as read locally
+      await pullRemoteProgressToLocal(db, novelId, 'anilist', 2);
+      const chs = await chapterRepo.listByNovel(db, novelId);
+      expect(chs.filter((c) => c.is_read === 1).map((c) => c.chapter_number)).toEqual([1, 2]);
+
+      // Offline push queues pending chapter 3, then flush pushes chapter 3 cleanly
+      await syncTrackerProgress(db, {
+        novelId,
+        provider: 'anilist',
+        localChapter: 3,
+        pushRemote: async () => {
+          throw new Error('offline');
+        },
+      });
+      const pushed: number[] = [];
+      const flushed = await flushPendingTrackerSyncs(db, async (_provider, update) => {
+        pushed.push(update.chapter);
+      });
+      expect(flushed.synced).toBe(1);
+      expect(pushed).toEqual([3]);
     } finally {
       db.close();
     }

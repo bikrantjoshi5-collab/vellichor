@@ -106,7 +106,7 @@ export default function MoreScreen() {
     if (!db) return;
     setBusyAction('import-moss');
     try {
-      const picked = await DocumentPicker.getDocumentAsync({ type: 'application/json' });
+      const picked = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/plain', '*/*'] });
       if (picked.canceled || !picked.assets[0]) return;
       const raw = await FileSystem.readAsStringAsync(picked.assets[0].uri);
       const res = await importMossBackup(db, raw);
@@ -126,7 +126,9 @@ export default function MoreScreen() {
     if (!db) return;
     setBusyAction('import-ln');
     try {
-      const picked = await DocumentPicker.getDocumentAsync({ type: 'application/zip' });
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', '*/*'],
+      });
       if (picked.canceled || !picked.assets[0]) return;
       const b64 = await FileSystem.readAsStringAsync(picked.assets[0].uri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -140,13 +142,25 @@ export default function MoreScreen() {
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Import',
-            onPress: async () => {
-              const res = await importLnReaderZip(db, bytes);
-              await refreshLibrary();
-              Alert.alert(
-                'LNReader Import Complete',
-                `Imported ${res.novelsImported} novels and ${res.chaptersImported} chapters.`
-              );
+            onPress: () => {
+              void (async () => {
+                setBusyAction('import-ln');
+                try {
+                  const res = await importLnReaderZip(db, bytes);
+                  await refreshLibrary();
+                  Alert.alert(
+                    'LNReader Import Complete',
+                    `Imported ${res.novelsImported} novels and ${res.chaptersImported} chapters.`
+                  );
+                } catch (err) {
+                  Alert.alert(
+                    'LNReader Import Failed',
+                    err instanceof Error ? err.message : 'Failed to import archive'
+                  );
+                } finally {
+                  setBusyAction(null);
+                }
+              })();
             },
           },
         ]
@@ -159,46 +173,57 @@ export default function MoreScreen() {
   };
 
   const handleConnectAniList = async () => {
-    if (!anilistClientId.trim()) {
-      Alert.alert('AniList Client ID Required', `Create an AniList developer app with Redirect URI:\n${redirectUri}`);
-      return;
-    }
-    await trackerAuthStore.setClientId('anilist', anilistClientId.trim());
-    const authUrl = buildAniListImplicitAuthUrl(anilistClientId.trim());
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-    if (result.type === 'success' && result.url) {
-      const token = extractAniListTokenFromRedirect(result.url);
-      if (token) {
-        await trackerAuthStore.setToken('anilist', token);
-        setAnilistConnected(true);
-        Alert.alert('AniList Connected', 'Two-way chapter and status sync is now active.');
+    try {
+      if (!anilistClientId.trim()) {
+        Alert.alert('AniList Client ID Required', `Create an AniList developer app with Redirect URI:\n${redirectUri}`);
+        return;
       }
+      await trackerAuthStore.setClientId('anilist', anilistClientId.trim());
+      const authUrl = buildAniListImplicitAuthUrl(anilistClientId.trim());
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+      if (result.type === 'success' && result.url) {
+        const token = extractAniListTokenFromRedirect(result.url);
+        if (token) {
+          await trackerAuthStore.setToken('anilist', token);
+          setAnilistConnected(true);
+          Alert.alert('AniList Connected', 'Two-way chapter and status sync is now active.');
+        }
+      }
+    } catch (err) {
+      Alert.alert('AniList Login Failed', err instanceof Error ? err.message : 'Authentication error');
     }
   };
 
   const handleConnectMal = async () => {
-    if (!malClientId.trim()) {
-      Alert.alert('MAL Client ID Required', `Create a MyAnimeList API client with Redirect URI:\n${redirectUri}`);
-      return;
-    }
-    await trackerAuthStore.setClientId('mal', malClientId.trim());
-    const verifier = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '').slice(0, 64);
-    const authUrl = buildMalPkceAuthUrl(malClientId.trim(), verifier, redirectUri);
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-    if (result.type === 'success' && result.url) {
-      const queryPart = result.url.split('?')[1]?.split('#')[0] ?? '';
-      const code = new URLSearchParams(queryPart).get('code');
-      if (code) {
-        const exchanged = await exchangeMalCodeForToken({
-          clientId: malClientId.trim(),
-          code,
-          codeVerifier: verifier,
-          redirectUri,
-        });
-        await trackerAuthStore.setToken('mal', exchanged.accessToken);
-        setMalConnected(true);
-        Alert.alert('MyAnimeList Connected', 'Two-way chapter and volume sync is now active.');
+    try {
+      if (!malClientId.trim()) {
+        Alert.alert('MAL Client ID Required', `Create a MyAnimeList API client with Redirect URI:\n${redirectUri}`);
+        return;
       }
+      await trackerAuthStore.setClientId('mal', malClientId.trim());
+      const verifier = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '').slice(0, 64);
+      const authUrl = buildMalPkceAuthUrl(malClientId.trim(), verifier, redirectUri);
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+      if (result.type === 'success' && result.url) {
+        const queryPart = result.url.split('?')[1]?.split('#')[0] ?? '';
+        const code = new URLSearchParams(queryPart).get('code');
+        if (code) {
+          const exchanged = await exchangeMalCodeForToken({
+            clientId: malClientId.trim(),
+            code,
+            codeVerifier: verifier,
+            redirectUri,
+          });
+          await trackerAuthStore.setToken('mal', exchanged.accessToken);
+          if (exchanged.refreshToken) {
+            await trackerAuthStore.setMalRefreshToken(exchanged.refreshToken);
+          }
+          setMalConnected(true);
+          Alert.alert('MyAnimeList Connected', 'Two-way chapter and volume sync is now active.');
+        }
+      }
+    } catch (err) {
+      Alert.alert('MAL Login Failed', err instanceof Error ? err.message : 'Authentication error');
     }
   };
 

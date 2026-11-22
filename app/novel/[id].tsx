@@ -18,6 +18,9 @@ import { libraryRepo } from '@/db/repositories/libraryRepo';
 import { chapterRepo } from '@/db/repositories/chapterRepo';
 import { trackerRepo } from '@/db/repositories/trackerRepo';
 import { getRuntimePlugin } from '@/services/pluginLoader';
+import { trackerAuthStore } from '@/services/trackerAuth';
+import { fetchAniListProgress } from '@/trackers/anilist';
+import { fetchMalProgress } from '@/trackers/mal';
 import type { ChapterRow, NovelRow, ReadingStatus, ShelfRow, TrackerLinkRow } from '@/db/types';
 import { ThemedText } from '@/components/ThemedText';
 import { Button } from '@/components/Button';
@@ -41,6 +44,7 @@ export default function NovelDetailScreen() {
   const db = useAppStore((s) => s.db);
   const engine = useAppStore((s) => s.engine);
   const allShelves = useAppStore((s) => s.shelves);
+  const downloadJobs = useAppStore((s) => s.downloadJobs);
   const refreshLibrary = useAppStore((s) => s.refreshLibrary);
   const enqueueDownloads = useAppStore((s) => s.enqueueDownloads);
 
@@ -68,7 +72,7 @@ export default function NovelDetailScreen() {
 
   useEffect(() => {
     void loadData();
-  }, [loadData]);
+  }, [loadData, downloadJobs.length]);
 
   const handleRefreshFromSource = async () => {
     if (!db || !novel) return;
@@ -225,7 +229,7 @@ export default function NovelDetailScreen() {
                   return (
                     <Chip
                       key={s.id}
-                      label={has ? `✓ ${s.name}` : s.name}
+                      label={s.name}
                       active={has}
                       onPress={async () => {
                         if (!db) return;
@@ -330,6 +334,21 @@ export default function NovelDetailScreen() {
         }
         onLinkSelected={async (item) => {
           if (!db) return;
+          let remoteProgress = 0;
+          let remoteVolume = 0;
+          if (item.provider === 'anilist' || item.provider === 'mal') {
+            const token = await trackerAuthStore.getToken(item.provider);
+            if (token) {
+              const live =
+                item.provider === 'anilist'
+                  ? await fetchAniListProgress(item.remoteId, token).catch(() => null)
+                  : await fetchMalProgress(item.remoteId, token).catch(() => null);
+              if (live) {
+                remoteProgress = live.chapter;
+                remoteVolume = live.volume;
+              }
+            }
+          }
           await trackerRepo.upsertLink(db, {
             novelId: novel.id,
             provider: item.provider,
@@ -337,6 +356,8 @@ export default function NovelDetailScreen() {
             remoteTitle: item.title,
             remoteUrl: item.url ?? null,
             status: novel.reading_status,
+            lastChapterSynced: remoteProgress,
+            volumeProgress: remoteVolume,
           });
           await loadData();
         }}

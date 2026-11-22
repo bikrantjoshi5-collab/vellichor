@@ -46,7 +46,10 @@ export default function SourcesScreen() {
             installedVersion: p.version,
             remoteVersion: p.remote_version,
             installedHash: p.bundle_hash,
+            installedManifestHash: p.installed_manifest_hash,
             remoteHash: p.remote_hash,
+            installedEtag: p.installed_etag,
+            remoteEtag: p.remote_etag,
           }).hasUpdate
       ),
     [plugins]
@@ -78,7 +81,10 @@ export default function SourcesScreen() {
             installedVersion: item.version,
             remoteVersion: item.remote_version,
             installedHash: item.bundle_hash,
+            installedManifestHash: item.installed_manifest_hash,
             remoteHash: item.remote_hash,
+            installedEtag: item.installed_etag,
+            remoteEtag: item.remote_etag,
           })
         : { hasUpdate: false, reason: 'none' as const };
 

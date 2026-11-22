@@ -23,6 +23,7 @@ import {
   IBMPlexMono_600SemiBold,
 } from '@expo-google-fonts/ibm-plex-mono';
 import * as TaskManager from 'expo-task-manager';
+import * as BackgroundTask from 'expo-background-task';
 import { mossColors } from '@/theme';
 import { useAppStore } from '@/store/appStore';
 import { openAppDatabase } from '@/db/database';
@@ -43,8 +44,9 @@ if (!TaskManager.isTaskDefined(WEEKLY_UPDATE_TASK_NAME)) {
         getPlugin: (id) => getRuntimePlugin(db, id),
       });
       await sendUpdateSummaryNotification(report);
+      return BackgroundTask.BackgroundTaskResult.Success;
     } catch {
-      // Background errors fail gracefully without crashing Android WorkManager.
+      return BackgroundTask.BackgroundTaskResult.Failed;
     }
   });
 }
@@ -97,6 +99,7 @@ export default function RootLayout() {
           <Stack.Screen name="source/[pluginId]" />
           <Stack.Screen name="queue" />
           <Stack.Screen name="webview" />
+          <Stack.Screen name="auth" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>

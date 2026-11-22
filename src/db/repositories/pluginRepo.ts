@@ -9,6 +9,13 @@ export interface ManifestPluginUpsert {
   iconUrl: string | null;
   fileUrl: string;
   remoteHash?: string | null;
+  remoteEtag?: string | null;
+}
+
+function deriveRepoDisplayName(url: string): string {
+  const m = url.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/i);
+  if (m) return m[1];
+  return url.split('/').slice(-4, -2).join('/') || 'GitHub Repo';
 }
 
 export const pluginRepo = {
@@ -16,7 +23,7 @@ export const pluginRepo = {
     const cleanUrl = url.trim();
     const existing = await db.getFirstAsync<RepoRow>('SELECT * FROM repos WHERE url = ?', [cleanUrl]);
     if (existing) return existing.id;
-    const derivedName = name?.trim() || cleanUrl.split('/').slice(-4, -2).join('/') || 'GitHub Repo';
+    const derivedName = name?.trim() || deriveRepoDisplayName(cleanUrl);
     const res = await db.runAsync('INSERT INTO repos (url, name) VALUES (?, ?)', [cleanUrl, derivedName]);
     return res.lastInsertRowId;
   },
@@ -26,6 +33,7 @@ export const pluginRepo = {
   },
 
   async deleteRepo(db: SqlExecutor, repoId: number): Promise<void> {
+    await db.runAsync('DELETE FROM plugins WHERE repo_id = ? AND installed = 0', [repoId]);
     await db.runAsync('DELETE FROM repos WHERE id = ?', [repoId]);
   },
 
@@ -44,12 +52,25 @@ export const pluginRepo = {
           lang = ?,
           site = ?,
           remote_version = ?,
-          remote_hash = COALESCE(?, remote_hash),
+          remote_hash = ?,
+          remote_etag = COALESCE(?, remote_etag),
           icon_url = COALESCE(?, icon_url),
           file_url = ?,
           updated_at = ?
         WHERE id = ?`,
-        [repoId, p.name, p.lang, p.site, p.version, p.remoteHash ?? null, p.iconUrl, p.fileUrl, now, p.id]
+        [
+          repoId,
+          p.name,
+          p.lang,
+          p.site,
+          p.version,
+          p.remoteHash ?? null,
+          p.remoteEtag ?? null,
+          p.iconUrl,
+          p.fileUrl,
+          now,
+          p.id,
+        ]
       );
       return;
     }
@@ -57,33 +78,50 @@ export const pluginRepo = {
     await db.runAsync(
       `INSERT INTO plugins (
         id, repo_id, name, lang, site, version, remote_version,
-        bundle_hash, remote_hash, icon_url, file_url, installed, enabled, updated_at
-      ) VALUES (?, ?, ?, ?, ?, '0.0.0', ?, NULL, ?, ?, ?, 0, 1, ?)`,
-      [p.id, repoId, p.name, p.lang, p.site, p.version, p.remoteHash ?? null, p.iconUrl, p.fileUrl, now]
+        bundle_hash, installed_manifest_hash, remote_hash, installed_etag, remote_etag,
+        icon_url, file_url, installed, enabled, updated_at
+      ) VALUES (?, ?, ?, ?, ?, '0.0.0', ?, NULL, NULL, ?, NULL, ?, ?, ?, 0, 1, ?)`,
+      [p.id, repoId, p.name, p.lang, p.site, p.version, p.remoteHash ?? null, p.remoteEtag ?? null, p.iconUrl, p.fileUrl, now]
     );
+  },
+
+  async updateRemoteEtag(db: SqlExecutor, pluginId: string, remoteEtag: string | null): Promise<void> {
+    if (!remoteEtag) return;
+    await db.runAsync('UPDATE plugins SET remote_etag = ? WHERE id = ?', [remoteEtag, pluginId]);
   },
 
   async markPluginInstalled(
     db: SqlExecutor,
     pluginId: string,
-    info: { version: string; bundleHash: string; localPath: string }
+    info: { version: string; bundleHash: string; manifestHash?: string | null; etag?: string | null; localPath: string }
   ): Promise<void> {
     await db.runAsync(
       `UPDATE plugins SET
         version = ?,
         bundle_hash = ?,
-        remote_hash = COALESCE(remote_hash, ?),
+        installed_manifest_hash = ?,
+        installed_etag = COALESCE(?, installed_etag),
+        remote_etag = COALESCE(?, remote_etag),
         local_path = ?,
         installed = 1,
         updated_at = ?
       WHERE id = ?`,
-      [info.version, info.bundleHash, info.bundleHash, info.localPath, Date.now(), pluginId]
+      [
+        info.version,
+        info.bundleHash,
+        info.manifestHash ?? null,
+        info.etag ?? null,
+        info.etag ?? null,
+        info.localPath,
+        Date.now(),
+        pluginId,
+      ]
     );
   },
 
   async markPluginUninstalled(db: SqlExecutor, pluginId: string): Promise<void> {
     await db.runAsync(
-      `UPDATE plugins SET installed = 0, local_path = NULL, bundle_hash = NULL, version = '0.0.0', updated_at = ? WHERE id = ?`,
+      `UPDATE plugins SET installed = 0, local_path = NULL, bundle_hash = NULL, installed_manifest_hash = NULL, installed_etag = NULL, version = '0.0.0', updated_at = ? WHERE id = ?`,
       [Date.now(), pluginId]
     );
   },
@@ -117,5 +155,9 @@ export const pluginRepo = {
 
   async deletePluginStorage(db: SqlExecutor, pluginId: string, key: string): Promise<void> {
     await db.runAsync('DELETE FROM plugin_storage WHERE plugin_id = ? AND key = ?', [pluginId, key]);
+  },
+
+  async clearPluginStorage(db: SqlExecutor, pluginId: string): Promise<void> {
+    await db.runAsync('DELETE FROM plugin_storage WHERE plugin_id = ?', [pluginId]);
   },
 };

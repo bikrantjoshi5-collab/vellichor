@@ -21,10 +21,15 @@ import { createExpoAssetStore, createExpoPluginBundleStore } from '@/downloads/s
 import { getRuntimePlugin, invalidateLoadedPlugin } from '@/services/pluginLoader';
 import {
   checkLibraryUpdates,
+  configureUpdateNotifications,
   registerWeeklyUpdateTask,
   sendUpdateSummaryNotification,
   type UpdateCadence,
 } from '@/updates/updateScheduler';
+import { flushPendingTrackerSyncs } from '@/trackers/syncService';
+import { pushAniListProgress } from '@/trackers/anilist';
+import { pushMalProgress } from '@/trackers/mal';
+import { trackerAuthStore } from '@/services/trackerAuth';
 import type { ReaderSurfaceId } from '@/theme';
 
 export interface ReaderPrefs {
@@ -35,6 +40,7 @@ export interface ReaderPrefs {
   tapZonesEnabled: boolean;
   keepScreenAwake: boolean;
   ttsRate: number;
+  ttsVoice?: string;
 }
 
 const DEFAULT_READER_PREFS: ReaderPrefs = {
@@ -45,6 +51,7 @@ const DEFAULT_READER_PREFS: ReaderPrefs = {
   tapZonesEnabled: true,
   keepScreenAwake: false,
   ttsRate: 1.0,
+  ttsVoice: undefined,
 };
 
 interface AppStoreState {
@@ -141,6 +148,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       onProgress: () => {
         void get().refreshQueue();
         void get().refreshLibrary();
+        void get().refreshUpdates();
       },
     });
     await engine.recoverInterrupted();
@@ -156,6 +164,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       }
     }
 
+    await configureUpdateNotifications();
     await registerWeeklyUpdateTask(savedCadence);
 
     set({ db, engine, updateCadence: savedCadence, readerPrefs, ready: true });
@@ -165,6 +174,20 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       get().refreshSources(),
       get().refreshQueue(),
     ]);
+
+    // Resume any recovered pending/rate-limited downloads automatically on app launch.
+    const existingJobs = await downloadRepo.listJobs(db, ['pending', 'rate_limited']);
+    if (existingJobs.length > 0) {
+      void engine.startLoop();
+    }
+
+    // Flush any queued offline AniList/MAL tracker syncs cleanly in the background.
+    void flushPendingTrackerSyncs(db, async (provider, update) => {
+      const token = await trackerAuthStore.getToken(provider);
+      if (!token) throw new Error('Not authenticated');
+      if (provider === 'anilist') await pushAniListProgress(token, update);
+      else await pushMalProgress(token, update);
+    }).catch(() => {});
   },
 
   async refreshLibrary() {
@@ -277,7 +300,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
           installedVersion: p.version,
           remoteVersion: p.remote_version,
           installedHash: p.bundle_hash,
+          installedManifestHash: p.installed_manifest_hash,
           remoteHash: p.remote_hash,
+          installedEtag: p.installed_etag,
+          remoteEtag: p.remote_etag,
         }).hasUpdate
     );
     let updated = 0;

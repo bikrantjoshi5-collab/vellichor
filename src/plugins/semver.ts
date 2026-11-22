@@ -20,27 +20,35 @@ export interface UpdateCheckInput {
   installedVersion: string;
   remoteVersion: string;
   installedHash?: string | null;
+  installedManifestHash?: string | null;
   remoteHash?: string | null;
+  installedEtag?: string | null;
+  remoteEtag?: string | null;
 }
 
 export interface UpdateCheckResult {
   hasUpdate: boolean;
-  reason: 'version' | 'hash' | 'none';
+  reason: 'version' | 'hash' | 'etag' | 'none';
 }
 
 export function detectPluginUpdate(input: UpdateCheckInput): UpdateCheckResult {
   if (compareSemver(input.remoteVersion, input.installedVersion) > 0) {
     return { hasUpdate: true, reason: 'version' };
   }
-  if (input.installedHash && input.remoteHash && input.installedHash !== input.remoteHash) {
-    return { hasUpdate: true, reason: 'hash' };
+  if (input.remoteHash) {
+    const baselineHash = input.installedManifestHash ?? input.installedHash;
+    if (baselineHash && baselineHash !== input.remoteHash) {
+      return { hasUpdate: true, reason: 'hash' };
+    }
+  }
+  if (input.installedEtag && input.remoteEtag && input.installedEtag !== input.remoteEtag) {
+    return { hasUpdate: true, reason: 'etag' };
   }
   return { hasUpdate: false, reason: 'none' };
 }
 
 /**
  * Deterministic 64-bit FNV-1a + length hex fingerprint for plugin bundles.
- * Pure JS so it works synchronously in both Hermes and Node without native crypto dependencies.
  */
 export function hashBundleCode(code: string): string {
   let h1 = 0x811c9dc5;

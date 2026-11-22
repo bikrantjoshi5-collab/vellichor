@@ -5,6 +5,7 @@ import type { PluginInstance } from '@/plugins/types';
 
 export const WEEKLY_UPDATE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
 export const WEEKLY_UPDATE_TASK_NAME = 'vellichor-weekly-chapter-updates';
+export const UPDATE_NOTIFICATION_CHANNEL = 'vellichor-updates';
 
 export type UpdateCadence = 'weekly' | 'daily' | 'off';
 
@@ -83,14 +84,37 @@ export async function checkLibraryUpdates(deps: {
   };
 }
 
+export async function configureUpdateNotifications(): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications');
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      }),
+    });
+    await Notifications.setNotificationChannelAsync(UPDATE_NOTIFICATION_CHANNEL, {
+      name: 'Chapter Updates',
+      importance: Notifications.AndroidImportance?.DEFAULT ?? 3,
+    });
+    await Notifications.requestPermissionsAsync();
+  } catch {
+    // Ignored in Node/Jest environment.
+  }
+}
+
 export async function registerWeeklyUpdateTask(cadence: UpdateCadence = 'weekly'): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const BackgroundTask = require('expo-background-task');
-    if (cadence === 'off') {
-      await BackgroundTask.unregisterTaskAsync(WEEKLY_UPDATE_TASK_NAME).catch(() => {});
-      return;
-    }
+    // Unregister first so cadence changes (weekly <-> daily) actually update the Android WorkManager interval.
+    await BackgroundTask.unregisterTaskAsync(WEEKLY_UPDATE_TASK_NAME).catch(() => {});
+    if (cadence === 'off') return;
+
     const minimumIntervalMinutes = cadence === 'daily' ? 24 * 60 : 7 * 24 * 60;
     await BackgroundTask.registerTaskAsync(WEEKLY_UPDATE_TASK_NAME, {
       minimumInterval: minimumIntervalMinutes,
@@ -109,6 +133,7 @@ export async function sendUpdateSummaryNotification(report: LibraryUpdateReport)
       content: {
         title: 'Vellichor · New Chapters',
         body: report.summaryText,
+        channelId: UPDATE_NOTIFICATION_CHANNEL,
       },
       trigger: null,
     });

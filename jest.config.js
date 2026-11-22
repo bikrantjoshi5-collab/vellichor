@@ -4,7 +4,8 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1'
+    '^@/(.*)$': '<rootDir>/src/$1',
+    '^cheerio/slim$': '<rootDir>/node_modules/cheerio/dist/commonjs/slim.js'
   },
   transformIgnorePatterns: [
     'node_modules/(?!(?:.+/)?(?:htmlparser2|domhandler|domutils|dom-serializer|domelementtype|entities|cheerio|cheerio-select|css-select|css-what|nth-check|boolbase)/)'
@@ -19,7 +20,11 @@ module.exports = {
           moduleResolution: 'node',
           esModuleInterop: true,
           strict: true,
-          jsx: 'react-jsx'
+          jsx: 'react-jsx',
+          paths: {
+            '@/*': ['./src/*'],
+            'cheerio/slim': ['./node_modules/cheerio/dist/commonjs/slim.d.ts']
+          }
         }
       }
     ]

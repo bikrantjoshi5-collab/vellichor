@@ -61,12 +61,25 @@ export const downloadRepo = {
   },
 
   async listRunnableJobs(db: SqlExecutor, nowMs: number): Promise<DownloadJobRow[]> {
+    // Exclude any plugin currently blocked on Cloudflare (cf_required) or actively cooling down (rate_limited > nowMs)
     return db.getAllAsync<DownloadJobRow>(
-      `SELECT * FROM download_jobs
-       WHERE status = 'pending' OR (status = 'rate_limited' AND COALESCE(next_retry_at, 0) <= ?)
-       ORDER BY id ASC`,
-      [nowMs]
+      `SELECT j.* FROM download_jobs j
+       WHERE (j.status = 'pending' OR (j.status = 'rate_limited' AND COALESCE(j.next_retry_at, 0) <= ?))
+         AND NOT EXISTS (
+           SELECT 1 FROM download_jobs b
+           WHERE b.plugin_id = j.plugin_id
+             AND (b.status = 'cf_required' OR (b.status = 'rate_limited' AND COALESCE(b.next_retry_at, 0) > ?))
+         )
+       ORDER BY j.id ASC`,
+      [nowMs, nowMs]
     );
+  },
+
+  async getEarliestRetryAt(db: SqlExecutor): Promise<number | null> {
+    const row = await db.getFirstAsync<{ min_retry: number | null }>(
+      `SELECT MIN(next_retry_at) AS min_retry FROM download_jobs WHERE status = 'rate_limited' AND next_retry_at IS NOT NULL`
+    );
+    return row?.min_retry ?? null;
   },
 
   async resetInterruptedJobs(db: SqlExecutor): Promise<number> {

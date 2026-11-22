@@ -35,6 +35,29 @@ describe('LNReader GitHub extension updater and sandboxed plugin runtime', () =>
         remoteHash: 'same_sha256',
       })
     ).toEqual({ hasUpdate: false, reason: 'none' });
+
+    // Regression: ETag change detects silent upstream GitHub hotfix when manifest has no hash field
+    expect(
+      detectPluginUpdate({
+        installedVersion: '2.5.0',
+        remoteVersion: '2.5.0',
+        installedHash: 'fnv-local-1',
+        remoteHash: null,
+        installedEtag: '"etag-old"',
+        remoteEtag: '"etag-new"',
+      })
+    ).toEqual({ hasUpdate: true, reason: 'etag' });
+
+    // Regression: matching manifest hash does NOT false-loop when local FNV hash differs from manifest SHA-256
+    expect(
+      detectPluginUpdate({
+        installedVersion: '2.5.0',
+        remoteVersion: '2.5.0',
+        installedHash: 'fnv-local-1',
+        installedManifestHash: 'sha256-xyz',
+        remoteHash: 'sha256-xyz',
+      })
+    ).toEqual({ hasUpdate: false, reason: 'none' });
   });
 
   test('busts GitHub raw CDN cache when fetching plugins.min.json and resolves relative asset paths', async () => {

@@ -24,9 +24,9 @@ import { getRuntimePlugin } from '@/services/pluginLoader';
 import { readChapterBlocksFromDisk } from '@/downloads/storage';
 import { parseChapterHtml, type ChapterBlock } from '@/reader/chapterParser';
 import { createExpoSpeechDriver, TtsController, type TtsState } from '@/reader/ttsController';
-import { syncTrackerProgress } from '@/trackers/syncService';
-import { pushAniListProgress } from '@/trackers/anilist';
-import { pushMalProgress } from '@/trackers/mal';
+import { syncTrackerProgress, pullRemoteProgressToLocal } from '@/trackers/syncService';
+import { fetchAniListProgress, pushAniListProgress } from '@/trackers/anilist';
+import { fetchMalProgress, pushMalProgress } from '@/trackers/mal';
 import { trackerAuthStore } from '@/services/trackerAuth';
 import type { ChapterRow, NovelRow } from '@/db/types';
 import { ThemedText } from '@/components/ThemedText';
@@ -34,10 +34,10 @@ import { ReaderSettingsSheet } from '@/components/ReaderSettingsSheet';
 import { TtsDockedBar } from '@/components/TtsDockedBar';
 import { IllustrationLightbox } from '@/components/IllustrationLightbox';
 
-const TTS_RATES = [0.85, 1.0, 1.25, 1.5, 1.75];
+const TTS_RATES = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 export default function ReaderScreen() {
-  const { chapterId } = useLocalSearchParams<{ chapterId: string }>();
+  const { chapterId, autoPlayTts } = useLocalSearchParams<{ chapterId: string; autoPlayTts?: string }>();
   const currentId = Number(chapterId);
   const router = useRouter();
 
@@ -59,12 +59,14 @@ export default function ReaderScreen() {
   const [chromeVisible, setChromeVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ uri: string; alt?: string } | null>(null);
+  const [brokenImages, setBrokenImages] = useState<Record<number, boolean>>({});
 
   const [ttsState, setTtsState] = useState<TtsState>({
-    enabled: false, // Strictly OFF by default!
+    enabled: autoPlayTts === '1', // Strictly OFF by default; preserved ONLY on TTS chapter auto-advance
     playing: false,
     activeBlockIndex: null,
     rate: readerPrefs.ttsRate,
+    voice: readerPrefs.ttsVoice,
   });
 
   const scrollRef = useRef<ScrollView>(null);
@@ -72,7 +74,9 @@ export default function ReaderScreen() {
   const scrollYRef = useRef(0);
   const viewportHeightRef = useRef(600);
   const progressPctRef = useRef(0);
+  const syncedChapterIdRef = useRef<number | null>(null);
   const nextChapterRef = useRef<ChapterRow | null>(null);
+  const persistCompleteRef = useRef<() => Promise<void>>(async () => {});
   nextChapterRef.current = adjacent.next;
 
   const ttsRef = useRef<TtsController | null>(null);
@@ -88,17 +92,23 @@ export default function ReaderScreen() {
         }
       },
       onChapterComplete: () => {
-        const nextCh = nextChapterRef.current;
-        if (nextCh) {
-          router.replace({ pathname: '/reader/[chapterId]', params: { chapterId: String(nextCh.id) } });
-        }
+        void persistCompleteRef.current().then(() => {
+          const nextCh = nextChapterRef.current;
+          if (nextCh) {
+            router.replace({
+              pathname: '/reader/[chapterId]',
+              params: { chapterId: String(nextCh.id), autoPlayTts: '1' },
+            });
+          }
+        });
       },
     });
   }
 
   useEffect(() => {
     ttsRef.current?.setRate(readerPrefs.ttsRate);
-  }, [readerPrefs.ttsRate]);
+    ttsRef.current?.setVoice(readerPrefs.ttsVoice);
+  }, [readerPrefs.ttsRate, readerPrefs.ttsVoice]);
 
   useEffect(() => {
     const keepOn = readerPrefs.keepScreenAwake || ttsState.playing;
@@ -131,16 +141,32 @@ export default function ReaderScreen() {
           novelId: loadedNovel.id,
           provider: link.provider,
           localChapter: loadedChapter.chapter_number,
+          fetchRemoteChapter: async () => {
+            const remote =
+              link.provider === 'anilist'
+                ? await fetchAniListProgress(link.remote_id, token)
+                : await fetchMalProgress(link.remote_id, token);
+            return remote?.chapter ?? null;
+          },
           pushRemote: (update) =>
             link.provider === 'anilist'
               ? pushAniListProgress(token, update)
               : pushMalProgress(token, update),
         });
-        if (result.outcome === 'conflict') {
+        if (result.outcome === 'conflict' && result.remoteChapter !== undefined) {
+          const remoteCh = result.remoteChapter;
           Alert.alert(
             `${link.provider.toUpperCase()} Ahead of Local`,
-            `Remote is at chapter ${result.remoteChapter}, local is at ${result.localEffective}. Keep local progress or overwrite remote?`,
+            `Remote is at chapter ${remoteCh}, local is at ${result.localEffective}.`,
             [
+              {
+                text: 'Pull Remote Progress',
+                onPress: () => {
+                  void pullRemoteProgressToLocal(db, loadedNovel.id, link.provider, remoteCh).then(() =>
+                    refreshLibrary()
+                  );
+                },
+              },
               { text: 'Keep Local', style: 'cancel' },
               {
                 text: 'Overwrite Remote',
@@ -197,7 +223,13 @@ export default function ReaderScreen() {
         setNovel(n);
         setAdjacent(adj);
         setBlocks(parsed);
+        setBrokenImages({});
+        syncedChapterIdRef.current = ch.is_read === 1 ? ch.id : null;
         ttsRef.current?.loadBlocks(parsed, ch.scroll_paragraph_idx || 0);
+        if (autoPlayTts === '1') {
+          ttsRef.current?.setEnabled(true);
+          ttsRef.current?.play(0);
+        }
 
         await libraryRepo.touchLastRead(db, n.id);
         await historyRepo.recordSession(db, { novelId: n.id, chapterId: ch.id });
@@ -235,7 +267,8 @@ export default function ReaderScreen() {
         readProgressPct: Math.max(chapter.read_progress_pct, pct),
         scrollParagraphIdx: paragraphIdx,
       });
-      if (reachedEnd && chapter.is_read === 0) {
+      if (reachedEnd && syncedChapterIdRef.current !== chapter.id) {
+        syncedChapterIdRef.current = chapter.id;
         setChapter({ ...chapter, is_read: 1, read_progress_pct: 100 });
         void syncTrackersOnFinish(novel, chapter);
         void refreshLibrary();
@@ -243,6 +276,10 @@ export default function ReaderScreen() {
     },
     [db, chapter, novel, syncTrackersOnFinish, refreshLibrary]
   );
+
+  persistCompleteRef.current = async () => {
+    await persistProgress(100, Math.max(0, blocks.length - 1));
+  };
 
   const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
@@ -274,13 +311,15 @@ export default function ReaderScreen() {
     return `Paragraph ${ttsState.activeBlockIndex + 1} of ${blocks.length}`;
   }, [ttsState.activeBlockIndex, blocks.length]);
 
-  const handlePageTap = (locationY: number) => {
+  const handlePageTap = (docLocationY: number) => {
     const h = viewportHeightRef.current;
-    if (readerPrefs.tapZonesEnabled && locationY > h * 0.72) {
+    // Subtract scroll offset so tap zones stay viewport-relative even deep inside long chapters!
+    const viewportY = Math.max(0, docLocationY - scrollYRef.current);
+    if (readerPrefs.tapZonesEnabled && viewportY > h * 0.72) {
       scrollRef.current?.scrollTo({ y: scrollYRef.current + h * 0.82, animated: true });
       return;
     }
-    if (readerPrefs.tapZonesEnabled && locationY < h * 0.24) {
+    if (readerPrefs.tapZonesEnabled && viewportY < h * 0.24) {
       scrollRef.current?.scrollTo({ y: Math.max(0, scrollYRef.current - h * 0.82), animated: true });
       return;
     }
@@ -391,10 +430,23 @@ export default function ReaderScreen() {
                   ) : block.type === 'image' ? (
                     <Pressable
                       testID={`chapter-illustration-${idx}`}
-                      onPress={() => setLightboxImage({ uri: block.uri, alt: block.alt })}
+                      onPress={() => !brokenImages[idx] && setLightboxImage({ uri: block.uri, alt: block.alt })}
                       style={styles.illustWrap}
                     >
-                      <Image source={{ uri: block.uri }} style={styles.illustImage} contentFit="contain" />
+                      {brokenImages[idx] ? (
+                        <View style={[styles.illustError, { borderColor: surface.border, backgroundColor: surface.surface }]}>
+                          <ThemedText variant="caption" style={{ color: surface.muted }}>
+                            Illustration unavailable offline
+                          </ThemedText>
+                        </View>
+                      ) : (
+                        <Image
+                          source={{ uri: block.uri }}
+                          style={styles.illustImage}
+                          contentFit="contain"
+                          onError={() => setBrokenImages((prev) => ({ ...prev, [idx]: true }))}
+                        />
+                      )}
                       {block.alt ? (
                         <ThemedText variant="caption" style={{ color: surface.muted, textAlign: 'center' }}>
                           {block.alt}
@@ -563,6 +615,14 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 320,
     borderRadius: radius.cover,
+  },
+  illustError: {
+    width: '100%',
+    paddingVertical: spacing.lg,
+    borderRadius: radius.cover,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   endNavRow: {
     flexDirection: 'row',

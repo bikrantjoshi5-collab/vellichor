@@ -17,58 +17,74 @@ export const chapterRepo = {
     novelId: number,
     chapters: UpsertChapterInput[]
   ): Promise<{ inserted: number; total: number }> {
+    if (chapters.length === 0) return { inserted: 0, total: 0 };
     let inserted = 0;
     const now = Date.now();
-    for (let i = 0; i < chapters.length; i++) {
-      const ch = chapters[i];
-      const existing = await db.getFirstAsync<{ id: number }>(
-        'SELECT id FROM chapters WHERE novel_id = ? AND path = ?',
-        [novelId, ch.path]
-      );
-      const chNum = ch.chapterNumber ?? i + 1;
-      if (existing) {
-        await db.runAsync(
-          `UPDATE chapters SET
-            name = ?,
-            chapter_number = ?,
-            release_date = COALESCE(?, release_date),
-            is_read = COALESCE(?, is_read),
-            read_progress_pct = COALESCE(?, read_progress_pct),
-            scroll_paragraph_idx = COALESCE(?, scroll_paragraph_idx)
-          WHERE id = ?`,
-          [
-            ch.name,
-            chNum,
-            ch.releaseDate ?? null,
-            ch.isRead === undefined ? null : ch.isRead ? 1 : 0,
-            ch.readProgressPct ?? null,
-            ch.scrollParagraphIdx ?? null,
-            existing.id,
-          ]
+    await db.execAsync('BEGIN TRANSACTION');
+    try {
+      for (let i = 0; i < chapters.length; i++) {
+        const ch = chapters[i];
+        const existing = await db.getFirstAsync<{ id: number }>(
+          'SELECT id FROM chapters WHERE novel_id = ? AND path = ?',
+          [novelId, ch.path]
         );
-      } else {
-        await db.runAsync(
-          `INSERT INTO chapters (
-            novel_id, path, name, chapter_number, release_date, discovered_at,
-            is_read, read_progress_pct, scroll_paragraph_idx, is_downloaded, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-          [
-            novelId,
-            ch.path,
-            ch.name,
-            chNum,
-            ch.releaseDate ?? null,
-            ch.discoveredAt ?? now,
-            ch.isRead ? 1 : 0,
-            ch.readProgressPct ?? 0,
-            ch.scrollParagraphIdx ?? 0,
-            now,
-          ]
-        );
-        inserted++;
+        const chNum = ch.chapterNumber ?? i + 1;
+        if (existing) {
+          await db.runAsync(
+            `UPDATE chapters SET
+              name = ?,
+              chapter_number = ?,
+              release_date = COALESCE(?, release_date),
+              is_read = COALESCE(?, is_read),
+              read_progress_pct = COALESCE(?, read_progress_pct),
+              scroll_paragraph_idx = COALESCE(?, scroll_paragraph_idx)
+            WHERE id = ?`,
+            [
+              ch.name,
+              chNum,
+              ch.releaseDate ?? null,
+              ch.isRead === undefined ? null : ch.isRead ? 1 : 0,
+              ch.readProgressPct ?? null,
+              ch.scrollParagraphIdx ?? null,
+              existing.id,
+            ]
+          );
+        } else {
+          await db.runAsync(
+            `INSERT INTO chapters (
+              novel_id, path, name, chapter_number, release_date, discovered_at,
+              is_read, read_progress_pct, scroll_paragraph_idx, is_downloaded, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+            [
+              novelId,
+              ch.path,
+              ch.name,
+              chNum,
+              ch.releaseDate ?? null,
+              ch.discoveredAt ?? now,
+              ch.isRead ? 1 : 0,
+              ch.readProgressPct ?? 0,
+              ch.scrollParagraphIdx ?? 0,
+              now,
+            ]
+          );
+          inserted++;
+        }
       }
+      await db.execAsync('COMMIT');
+    } catch (err) {
+      await db.execAsync('ROLLBACK').catch(() => {});
+      throw err;
     }
     return { inserted, total: chapters.length };
+  },
+
+  async markReadUpToChapter(db: SqlExecutor, novelId: number, maxChapterNumber: number): Promise<void> {
+    await db.runAsync(
+      `UPDATE chapters SET is_read = 1, read_progress_pct = 100, updated_at = ?
+       WHERE novel_id = ? AND chapter_number <= ?`,
+      [Date.now(), novelId, maxChapterNumber]
+    );
   },
 
   async listByNovel(db: SqlExecutor, novelId: number, order: 'asc' | 'desc' = 'asc'): Promise<ChapterRow[]> {

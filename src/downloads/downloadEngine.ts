@@ -29,6 +29,7 @@ export interface DownloadEngineOptions {
   maxGlobalSources?: number;
   politeDelayMs?: number;
   maxRetries?: number;
+  backoffScheduleMs?: number[];
   now?: () => number;
   onProgress?: () => void;
 }
@@ -42,12 +43,7 @@ export interface TickResult {
   warnings: string[];
 }
 
-const BACKOFF_MS = [3_000, 10_000, 30_000];
-
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const DEFAULT_BACKOFF_MS = [3_000, 10_000, 30_000];
 
 function classifyError(err: unknown): {
   kind: 'cloudflare' | 'rate_limit' | 'transient' | 'fatal';
@@ -75,10 +71,12 @@ export class DownloadEngine {
   private readonly maxGlobalSources: number;
   private readonly politeDelayMs: number;
   private readonly maxRetries: number;
+  private readonly backoffScheduleMs: number[];
   private readonly now: () => number;
   private readonly onProgress?: () => void;
   private runningLoop = false;
   private paused = false;
+  private sleepCancel: (() => void) | null = null;
 
   constructor(options: DownloadEngineOptions) {
     this.db = options.db;
@@ -88,8 +86,24 @@ export class DownloadEngine {
     this.maxGlobalSources = Math.max(1, options.maxGlobalSources ?? 2);
     this.politeDelayMs = options.politeDelayMs ?? 750;
     this.maxRetries = options.maxRetries ?? 3;
+    this.backoffScheduleMs = options.backoffScheduleMs ?? DEFAULT_BACKOFF_MS;
     this.now = options.now ?? (() => Date.now());
     this.onProgress = options.onProgress;
+  }
+
+  private cancellableSleep(ms: number): Promise<void> {
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.sleepCancel = null;
+        resolve();
+      }, ms);
+      this.sleepCancel = () => {
+        clearTimeout(timer);
+        this.sleepCancel = null;
+        resolve();
+      };
+    });
   }
 
   async recoverInterrupted(): Promise<number> {
@@ -108,6 +122,7 @@ export class DownloadEngine {
 
   async pauseAll(): Promise<void> {
     this.paused = true;
+    this.sleepCancel?.();
     await downloadRepo.pauseAll(this.db);
     this.onProgress?.();
   }
@@ -160,7 +175,6 @@ export class DownloadEngine {
     const runnable = await downloadRepo.listRunnableJobs(this.db, this.now());
     if (runnable.length === 0) return result;
 
-    // Pick at most maxGlobalSources distinct plugins, up to maxConcurrentPerSource jobs each.
     const byPlugin = new Map<string, DownloadJobRow[]>();
     for (const job of runnable) {
       if (!byPlugin.has(job.plugin_id)) {
@@ -183,20 +197,30 @@ export class DownloadEngine {
 
     if (this.politeDelayMs > 0 && result.processed > 0) {
       const jitter = Math.floor(Math.random() * Math.min(400, this.politeDelayMs));
-      await sleep(this.politeDelayMs + jitter);
+      await this.cancellableSleep(this.politeDelayMs + jitter);
     }
 
     this.onProgress?.();
     return result;
   }
 
+  /**
+   * Continuously processes pending jobs AND sleeps cleanly for scheduled 429/5xx backoff retries
+   * until all non-paused / non-Cloudflare jobs settle.
+   */
   async startLoop(): Promise<void> {
     if (this.runningLoop) return;
     this.runningLoop = true;
     try {
       while (!this.paused) {
         const tick = await this.processNextTick();
-        if (tick.processed === 0) break;
+        if (tick.processed > 0) continue;
+
+        const nextRetryAt = await downloadRepo.getEarliestRetryAt(this.db);
+        if (nextRetryAt === null) break;
+
+        const waitMs = Math.max(10, nextRetryAt - this.now());
+        await this.cancellableSleep(waitMs);
       }
     } finally {
       this.runningLoop = false;
@@ -244,7 +268,6 @@ export class DownloadEngine {
             imgErr instanceof Error ? imgErr.message : String(imgErr)
           }`;
           result.warnings.push(warnMsg);
-          // Keep original URL as online fallback without failing chapter text.
           rewritten.push(block);
         }
       }
@@ -276,7 +299,7 @@ export class DownloadEngine {
       }
 
       if ((classified.kind === 'rate_limit' || classified.kind === 'transient') && nextAttempt <= this.maxRetries) {
-        const delay = BACKOFF_MS[Math.min(nextAttempt - 1, BACKOFF_MS.length - 1)];
+        const delay = this.backoffScheduleMs[Math.min(nextAttempt - 1, this.backoffScheduleMs.length - 1)];
         await downloadRepo.updateJobStatus(this.db, job.id, 'rate_limited', {
           attemptCount: nextAttempt,
           nextRetryAt: this.now() + delay,

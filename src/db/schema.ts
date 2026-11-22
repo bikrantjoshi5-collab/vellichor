@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS plugins (
   version TEXT NOT NULL DEFAULT '0.0.0',
   remote_version TEXT NOT NULL DEFAULT '0.0.0',
   bundle_hash TEXT,
+  installed_manifest_hash TEXT,
   remote_hash TEXT,
+  installed_etag TEXT,
+  remote_etag TEXT,
   icon_url TEXT,
   file_url TEXT NOT NULL,
   local_path TEXT,
@@ -106,6 +109,7 @@ CREATE TABLE IF NOT EXISTS tracker_links (
   chapter_offset INTEGER NOT NULL DEFAULT 0,
   score REAL NOT NULL DEFAULT 0,
   pending_sync INTEGER NOT NULL DEFAULT 0,
+  pending_chapter REAL,
   updated_at INTEGER NOT NULL,
   UNIQUE(novel_id, provider)
 );

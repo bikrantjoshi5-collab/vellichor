@@ -6,7 +6,11 @@ function getExpoFs() {
   return require('expo-file-system') as typeof import('expo-file-system');
 }
 
-function guessImageExt(url: string): string {
+function guessImageExt(url: string, contentType?: string): string {
+  const ct = (contentType ?? '').toLowerCase();
+  if (ct.includes('png')) return 'png';
+  if (ct.includes('webp')) return 'webp';
+  if (ct.includes('gif')) return 'gif';
   const clean = url.split('?')[0].toLowerCase();
   if (clean.endsWith('.png')) return 'png';
   if (clean.endsWith('.webp')) return 'webp';
@@ -32,8 +36,18 @@ export function createExpoAssetStore(): AssetFileStore {
       const ext = guessImageExt(url);
       const target = `${assetsDir}/img_${index}.${ext}`;
       const result = await FileSystem.downloadAsync(url, target, { headers });
-      if (result.status < 200 || result.status >= 300) {
-        throw new Error(`HTTP ${result.status} downloading illustration`);
+
+      const contentType =
+        result.headers?.['Content-Type'] ?? result.headers?.['content-type'] ?? '';
+      const isHtmlError = contentType.toLowerCase().includes('text/html');
+
+      if (result.status < 200 || result.status >= 300 || isHtmlError) {
+        await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => {});
+        throw new Error(
+          isHtmlError
+            ? `Rejected non-image response (${contentType}) for illustration`
+            : `HTTP ${result.status} downloading illustration`
+        );
       }
       return result.uri;
     },

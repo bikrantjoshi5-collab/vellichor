@@ -76,6 +76,25 @@ export async function searchMalNovels(query: string, accessToken: string): Promi
     }));
 }
 
+export async function fetchMalProgress(
+  remoteId: string,
+  accessToken: string
+): Promise<{ chapter: number; volume: number; score: number } | null> {
+  const res = await fetch(`${MAL_API}/manga/${encodeURIComponent(remoteId)}?fields=my_list_status`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    my_list_status?: { num_chapters_read?: number; num_volumes_read?: number; score?: number };
+  };
+  if (!json.my_list_status) return null;
+  return {
+    chapter: json.my_list_status.num_chapters_read ?? 0,
+    volume: json.my_list_status.num_volumes_read ?? 0,
+    score: json.my_list_status.score ?? 0,
+  };
+}
+
 export async function pushMalProgress(accessToken: string, update: TrackerRemoteUpdate): Promise<void> {
   const body = new URLSearchParams({
     status: STATUS_TO_MAL[update.status],

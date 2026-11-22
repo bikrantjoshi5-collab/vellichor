@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import * as Speech from 'expo-speech';
 import { X } from 'lucide-react-native';
 import {
   mossColors,
@@ -32,6 +33,15 @@ export function ReaderSettingsSheet({
   onUpdatePrefs,
   onClose,
 }: ReaderSettingsSheetProps) {
+  const [voices, setVoices] = useState<Speech.Voice[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    void Speech.getAvailableVoicesAsync()
+      .then((list) => setVoices(list.filter((v) => v.language.toLowerCase().startsWith('en')).slice(0, 8)))
+      .catch(() => {});
+  }, [visible]);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
@@ -67,6 +77,29 @@ export function ReaderSettingsSheet({
                 thumbColor={ttsEnabled ? mossColors.accentFg : mossColors.fg}
               />
             </View>
+
+            {ttsEnabled && voices.length > 0 ? (
+              <View style={styles.section}>
+                <ThemedText variant="caption" style={styles.sectionLabel}>
+                  Voice Profile
+                </ThemedText>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                  <Chip
+                    label="System Default"
+                    active={!prefs.ttsVoice}
+                    onPress={() => onUpdatePrefs({ ttsVoice: undefined })}
+                  />
+                  {voices.map((v) => (
+                    <Chip
+                      key={v.identifier}
+                      label={v.name || v.identifier}
+                      active={prefs.ttsVoice === v.identifier}
+                      onPress={() => onUpdatePrefs({ ttsVoice: v.identifier })}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
 
             <View style={styles.section}>
               <ThemedText variant="caption" style={styles.sectionLabel}>

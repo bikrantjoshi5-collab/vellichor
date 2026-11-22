@@ -7,13 +7,6 @@ function defaultFetch(): FetchLike {
   return (url, init) => fetch(url, init) as unknown as ReturnType<FetchLike>;
 }
 
-/**
- * Resolves a relative path from an LNReader plugins.min.json manifest against the repo root.
- * Example repoUrl:
- *   https://raw.githubusercontent.com/user/repo/plugins/v3.0.0/.dist/plugins.min.json
- * Root base becomes:
- *   https://raw.githubusercontent.com/user/repo/plugins/v3.0.0/
- */
 export function resolveRepoAssetUrl(repoUrl: string, assetPath?: string | null): string | null {
   if (!assetPath) return null;
   if (/^https?:\/\//i.test(assetPath)) return assetPath;
@@ -89,24 +82,54 @@ export async function fetchRepoManifest(
   return { etag, plugins };
 }
 
+async function probeRemoteBundleEtag(
+  fileUrl: string,
+  fetchImpl: FetchLike,
+  nowMs: number
+): Promise<string | null> {
+  try {
+    const res = await fetchImpl(appendCacheBuster(fileUrl, nowMs), {
+      method: 'HEAD',
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    if (!res.ok) return null;
+    return res.headers?.get('etag') ?? res.headers?.get('last-modified') ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function syncAllRepos(
   db: SqlExecutor,
   opts: { fetchImpl?: FetchLike; nowMs?: number } = {}
 ): Promise<{ reposChecked: number; pluginsIndexed: number; errors: string[] }> {
+  const fetchImpl = opts.fetchImpl ?? defaultFetch();
+  const nowMs = opts.nowMs ?? Date.now();
   const repos = await pluginRepo.listRepos(db);
   let pluginsIndexed = 0;
   const errors: string[] = [];
 
   for (const repo of repos) {
     try {
-      const manifest = await fetchRepoManifest(repo.url, opts);
-      await pluginRepo.updateRepoCheck(db, repo.id, manifest.etag, opts.nowMs ?? Date.now());
+      const manifest = await fetchRepoManifest(repo.url, { fetchImpl, nowMs });
+      await pluginRepo.updateRepoCheck(db, repo.id, manifest.etag, nowMs);
       for (const p of manifest.plugins) {
         await pluginRepo.upsertPluginFromManifest(db, repo.id, p);
         pluginsIndexed++;
       }
     } catch (err) {
       errors.push(`${repo.name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Probe HTTP ETag on installed plugins whose manifest lacks a hash field so silent same-version GitHub commits are caught.
+  const installed = await pluginRepo.listPlugins(db, true);
+  for (const p of installed) {
+    if (!p.remote_hash && p.file_url) {
+      const remoteEtag = await probeRemoteBundleEtag(p.file_url, fetchImpl, nowMs);
+      if (remoteEtag) {
+        await pluginRepo.updateRemoteEtag(db, p.id, remoteEtag);
+      }
     }
   }
 
@@ -142,11 +165,14 @@ export async function installOrUpdatePlugin(
   }
   const code = await res.text();
   const bundleHash = hashBundleCode(code);
+  const etag = res.headers?.get('etag') ?? res.headers?.get('last-modified') ?? row.remote_etag ?? null;
   const localPath = await bundleStore.writeBundle(pluginId, code);
 
   await pluginRepo.markPluginInstalled(db, pluginId, {
     version: row.remote_version || row.version || '1.0.0',
     bundleHash,
+    manifestHash: row.remote_hash ?? null,
+    etag,
     localPath,
   });
 

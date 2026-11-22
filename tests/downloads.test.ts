@@ -61,6 +61,69 @@ describe('Chapter parser and resilient bulk download engine', () => {
     ]);
   });
 
+  test('preserves wrapped illustrations (<a>/<center>/<span>), lazy data-src, and <br> paragraph breaks (Important #8)', () => {
+    const html = `
+      <div><a href="/full"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="/art/plate1.jpg" alt="Plate 1" /></a></div>
+      <center><img data-lazy-src="https://cdn.example/map.png" /></center>
+      <p>First line.<br/>Second line.<br><br>Third line.</p>
+    `;
+    const blocks = parseChapterHtml(html, 'https://ln.example/vol1');
+    expect(blocks).toEqual([
+      { type: 'image', uri: 'https://ln.example/art/plate1.jpg', alt: 'Plate 1' },
+      { type: 'image', uri: 'https://cdn.example/map.png' },
+      { type: 'paragraph', text: 'First line.' },
+      { type: 'paragraph', text: 'Second line.' },
+      { type: 'paragraph', text: 'Third line.' },
+    ]);
+  });
+
+  test('startLoop waits out short HTTP 429 backoff instead of exiting permanently and isolates source cooldown (Critical #2)', async () => {
+    const db = createTestSqliteExecutor();
+    const store = createMemoryAssetStore();
+    try {
+      await initDatabase(db);
+      const n1 = await libraryRepo.upsertNovel(db, { pluginId: 'flaky', path: '/n1', title: 'Flaky', inLibrary: true });
+      await chapterRepo.upsertChapters(db, n1, [
+        { path: '/c1', name: 'C1', chapterNumber: 1, discoveredAt: 1 },
+        { path: '/c2', name: 'C2', chapterNumber: 2, discoveredAt: 2 },
+      ]);
+      const [c1, c2] = await chapterRepo.listByNovel(db, n1);
+
+      let calls = 0;
+      const plugin: PluginInstance = {
+        id: 'flaky', name: 'Flaky', site: 'https://flaky.example', version: '1.0.0',
+        popularNovels: async () => [], searchNovels: async () => [],
+        parseNovel: async () => ({ path: '/n1', name: 'Flaky', chapters: [] }),
+        parseChapter: async () => {
+          calls++;
+          if (calls === 1) {
+            const err: any = new Error('HTTP 429');
+            err.status = 429;
+            throw err;
+          }
+          return '<p>Done</p>';
+        },
+      };
+
+      const engine = new DownloadEngine({
+        db,
+        assetStore: store,
+        getPlugin: async () => plugin,
+        politeDelayMs: 0,
+        backoffScheduleMs: [25, 50, 100],
+      });
+
+      await engine.enqueueChapters(n1, 'flaky', [c1.id, c2.id]);
+      await engine.startLoop();
+
+      const jobs = await downloadRepo.listJobs(db);
+      expect(jobs.every((j) => j.status === 'completed')).toBe(true);
+      expect(calls).toBe(3); // 1 failed 429 + 2 succeeded after automatic wakeup!
+    } finally {
+      db.close();
+    }
+  });
+
   test('downloads text + offline illustrations and saves chapter cleanly even if one illustration fails (Review Focus #3)', async () => {
     const db = createTestSqliteExecutor();
     const store = createMemoryAssetStore();

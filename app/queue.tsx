@@ -20,6 +20,7 @@ export default function QueueScreen() {
   const pauseDownloads = useAppStore((s) => s.pauseDownloads);
   const resumeDownloads = useAppStore((s) => s.resumeDownloads);
   const retryFailedDownloads = useAppStore((s) => s.retryFailedDownloads);
+  const cancelNovelDownloads = useAppStore((s) => s.cancelNovelDownloads);
   const refreshQueue = useAppStore((s) => s.refreshQueue);
 
   const summary = useMemo(() => {
@@ -77,9 +78,17 @@ export default function QueueScreen() {
           />
         ) : isDone ? (
           <CheckCircle2 size={18} color={mossColors.good} strokeWidth={1.8} />
-        ) : isWarn ? (
-          <AlertTriangle size={18} color={mossColors.warn} strokeWidth={1.8} />
-        ) : null}
+        ) : (
+          <View style={styles.jobRight}>
+            {isWarn ? <AlertTriangle size={18} color={mossColors.warn} strokeWidth={1.8} /> : null}
+            <Button
+              title="Cancel"
+              variant="ghost"
+              size="sm"
+              onPress={() => void cancelNovelDownloads(item.novel_id)}
+            />
+          </View>
+        )}
       </View>
     );
   };
@@ -217,5 +226,10 @@ const styles = StyleSheet.create({
   jobMeta: {
     flex: 1,
     gap: 2,
+  },
+  jobRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
 });

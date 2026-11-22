@@ -5,6 +5,7 @@ const KEYS = {
   anilistToken: 'vellichor_anilist_token',
   malClientId: 'vellichor_mal_client_id',
   malToken: 'vellichor_mal_token',
+  malRefreshToken: 'vellichor_mal_refresh_token',
 } as const;
 
 export const trackerAuthStore = {
@@ -34,6 +35,18 @@ export const trackerAuthStore = {
       await SecureStore.deleteItemAsync(key);
     } else {
       await SecureStore.setItemAsync(key, token);
+    }
+  },
+
+  async getMalRefreshToken(): Promise<string | null> {
+    return SecureStore.getItemAsync(KEYS.malRefreshToken);
+  },
+
+  async setMalRefreshToken(token: string | null): Promise<void> {
+    if (!token) {
+      await SecureStore.deleteItemAsync(KEYS.malRefreshToken);
+    } else {
+      await SecureStore.setItemAsync(KEYS.malRefreshToken, token);
     }
   },
 };

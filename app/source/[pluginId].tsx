@@ -26,14 +26,22 @@ export default function SourceBrowseScreen() {
   const [loading, setLoading] = useState(true);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
 
+  const resolveCover = (cover: string | undefined, site: string): string | undefined => {
+    if (!cover) return undefined;
+    if (/^https?:\/\//i.test(cover)) return cover;
+    if (cover.startsWith('//')) return `https:${cover}`;
+    if (!site) return cover;
+    return `${site.replace(/\/$/, '')}/${cover.replace(/^\//, '')}`;
+  };
+
   const loadPopular = async () => {
     if (!db || !pluginId) return;
     setLoading(true);
     try {
       const plugin = await getRuntimePlugin(db, pluginId);
       if (!plugin) throw new Error('Extension not installed');
-      const res = await plugin.popularNovels(1);
-      setItems(res);
+      const res = await plugin.popularNovels(1, { filters: {}, showLatestNovels: false });
+      setItems(res.map((n) => ({ ...n, cover: resolveCover(n.cover, plugin.site) })));
     } catch (err) {
       Alert.alert('Source Error', err instanceof Error ? err.message : 'Unable to load catalog');
     } finally {
@@ -52,7 +60,7 @@ export default function SourceBrowseScreen() {
       const plugin = await getRuntimePlugin(db, pluginId);
       if (!plugin) throw new Error('Extension not installed');
       const res = await plugin.searchNovels(query.trim(), 1);
-      setItems(res);
+      setItems(res.map((n) => ({ ...n, cover: resolveCover(n.cover, plugin.site) })));
     } catch (err) {
       Alert.alert('Search Error', err instanceof Error ? err.message : 'Search failed');
     } finally {

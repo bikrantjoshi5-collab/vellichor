@@ -74,6 +74,45 @@ export async function searchAniListNovels(query: string, accessToken?: string | 
   }));
 }
 
+export async function fetchAniListProgress(
+  remoteId: string,
+  accessToken: string
+): Promise<{ chapter: number; volume: number; score: number } | null> {
+  const gql = `
+    query ($mediaId: Int) {
+      Media(id: $mediaId, type: MANGA) {
+        mediaListEntry {
+          progress
+          progressVolumes
+          score
+        }
+      }
+    }
+  `;
+  const res = await fetch(ANILIST_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ query: gql, variables: { mediaId: Number.parseInt(remoteId, 10) } }),
+  });
+  if (!res.ok) return null;
+  const json = (await res.json()) as {
+    errors?: Array<{ message?: string }>;
+    data?: { Media?: { mediaListEntry?: { progress?: number; progressVolumes?: number; score?: number } | null } };
+  };
+  if (json.errors?.length) return null;
+  const entry = json.data?.Media?.mediaListEntry;
+  if (!entry) return null;
+  return {
+    chapter: entry.progress ?? 0,
+    volume: entry.progressVolumes ?? 0,
+    score: entry.score ?? 0,
+  };
+}
+
 export async function pushAniListProgress(accessToken: string, update: TrackerRemoteUpdate): Promise<void> {
   const mutation = `
     mutation ($mediaId: Int, $status: MediaListStatus, $progress: Int, $progressVolumes: Int, $score: Float) {
@@ -108,4 +147,8 @@ export async function pushAniListProgress(accessToken: string, update: TrackerRe
     }),
   });
   if (!res.ok) throw new Error(`AniList sync failed (HTTP ${res.status})`);
+  const json = (await res.json().catch(() => ({}))) as { errors?: Array<{ message?: string }> };
+  if (json.errors && json.errors.length > 0) {
+    throw new Error(json.errors[0]?.message || 'AniList GraphQL mutation error');
+  }
 }

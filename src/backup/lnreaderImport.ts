@@ -13,11 +13,12 @@ interface LnNovelEntry {
   summary?: string;
   status?: string;
   inLibrary?: number | boolean;
+  chapters?: LnChapterEntry[];
 }
 
 interface LnChapterEntry {
   id?: number;
-  novelId: number;
+  novelId?: number;
   path: string;
   name: string;
   chapterNumber?: number;
@@ -34,48 +35,99 @@ interface LnCategoryEntry {
 
 interface ParsedLnArchive {
   novels: LnNovelEntry[];
-  chapters: LnChapterEntry[];
+  chaptersByCanonicalKey: Map<string, LnChapterEntry[]>;
   categories: LnCategoryEntry[];
   idToCanonicalKey: Map<number, string>;
 }
 
-async function readJsonFromZip<T>(zip: JSZip, candidateNames: string[]): Promise<T | null> {
+async function readJsonArrayFromZip<T>(zip: JSZip, candidateNames: string[]): Promise<T[]> {
   for (const name of candidateNames) {
     const file = zip.file(name) ?? zip.file(new RegExp(`(^|/)${name}$`, 'i'))[0];
     if (file) {
-      const text = await file.async('text');
       try {
-        return JSON.parse(text) as T;
+        const text = await file.async('text');
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed as T[];
       } catch {
-        return null;
+        return [];
       }
     }
   }
-  return null;
+  return [];
 }
 
 async function parseLnZip(bytes: Uint8Array | ArrayBuffer): Promise<ParsedLnArchive> {
-  const zip = await JSZip.loadAsync(bytes);
-  const rawNovels = (await readJsonFromZip<LnNovelEntry[]>(zip, ['Novel.json', 'novels.json'])) ?? [];
-  const rawChapters = (await readJsonFromZip<LnChapterEntry[]>(zip, ['Chapter.json', 'chapters.json'])) ?? [];
-  const rawCategories = (await readJsonFromZip<LnCategoryEntry[]>(zip, ['Category.json', 'categories.json'])) ?? [];
+  let zip = await JSZip.loadAsync(bytes);
 
-  // Deduplicate novels by (pluginId, path) cleanly
+  // Modern LNReader v2.x backups nest the database files inside a `data.zip` archive.
+  const nestedDataZip = zip.file('data.zip') ?? zip.file(/(^|\/)data\.zip$/i)[0];
+  if (nestedDataZip) {
+    const innerBytes = await nestedDataZip.async('uint8array');
+    zip = await JSZip.loadAsync(innerBytes);
+  }
+
   const deduped = new Map<string, LnNovelEntry>();
   const idToCanonicalKey = new Map<number, string>();
-  for (const n of rawNovels) {
-    if (!n?.pluginId || !n?.path || !n?.name) continue;
+  const chaptersByCanonicalKey = new Map<string, LnChapterEntry[]>();
+
+  const registerNovel = (n: LnNovelEntry) => {
+    if (!n?.pluginId || !n?.path || !n?.name) return null;
     const key = `${n.pluginId}::${n.path}`;
-    idToCanonicalKey.set(n.id, key);
-    if (!deduped.has(key)) {
+    if (typeof n.id === 'number') {
+      idToCanonicalKey.set(n.id, key);
+    }
+    const existing = deduped.get(key);
+    if (!existing) {
       deduped.set(key, n);
+    } else if (!existing.inLibrary && n.inLibrary) {
+      // Prefer inLibrary=true when deduplicating records
+      deduped.set(key, { ...existing, ...n, inLibrary: true });
+    }
+    return key;
+  };
+
+  // Format A: LNReader v2.x per-novel files under NovelAndChapters/<id>.json
+  const novelAndChapterFiles = zip.file(/(^|\/)NovelAndChapters\/[^/]+\.json$/i);
+  for (const file of novelAndChapterFiles) {
+    try {
+      const text = await file.async('text');
+      const obj = JSON.parse(text) as LnNovelEntry;
+      if (!obj || typeof obj !== 'object') continue;
+      const key = registerNovel(obj);
+      if (key && Array.isArray(obj.chapters)) {
+        const bucket = chaptersByCanonicalKey.get(key) ?? [];
+        for (const ch of obj.chapters) {
+          if (ch?.path && ch?.name) bucket.push(ch);
+        }
+        chaptersByCanonicalKey.set(key, bucket);
+      }
+    } catch {
+      // Skip malformed individual JSON entry without aborting import
     }
   }
 
+  // Format B: Flat Novel.json + Chapter.json
+  const rawNovels = await readJsonArrayFromZip<LnNovelEntry>(zip, ['Novel.json', 'novels.json']);
+  for (const n of rawNovels) {
+    registerNovel(n);
+  }
+
+  const rawChapters = await readJsonArrayFromZip<LnChapterEntry>(zip, ['Chapter.json', 'chapters.json']);
+  for (const ch of rawChapters) {
+    if (!ch?.path || !ch?.name || typeof ch.novelId !== 'number') continue;
+    const key = idToCanonicalKey.get(ch.novelId);
+    if (!key) continue;
+    const bucket = chaptersByCanonicalKey.get(key) ?? [];
+    bucket.push(ch);
+    chaptersByCanonicalKey.set(key, bucket);
+  }
+
+  const rawCategories = await readJsonArrayFromZip<LnCategoryEntry>(zip, ['Category.json', 'categories.json']);
+
   return {
     novels: Array.from(deduped.values()),
-    chapters: rawChapters.filter((c) => c && c.path && c.name),
-    categories: rawCategories.filter((cat) => cat && cat.name),
+    chaptersByCanonicalKey,
+    categories: rawCategories.filter((cat) => cat && typeof cat.name === 'string' && cat.name.trim().length > 0),
     idToCanonicalKey,
   };
 }
@@ -89,9 +141,13 @@ export interface LnImportPreview {
 
 export async function previewLnReaderZip(bytes: Uint8Array | ArrayBuffer): Promise<LnImportPreview> {
   const parsed = await parseLnZip(bytes);
+  let chaptersCount = 0;
+  for (const list of parsed.chaptersByCanonicalKey.values()) {
+    chaptersCount += list.length;
+  }
   return {
     novelsCount: parsed.novels.length,
-    chaptersCount: parsed.chapters.length,
+    chaptersCount,
     categoriesCount: parsed.categories.length,
     sampleTitles: parsed.novels.slice(0, 5).map((n) => n.name),
   };
@@ -120,19 +176,10 @@ export async function importLnReaderZip(
     keyToDbNovelId.set(key, novelId);
   }
 
-  // Group chapters by canonical DB novelId
-  const chaptersByNovel = new Map<number, LnChapterEntry[]>();
-  for (const ch of parsed.chapters) {
-    const key = parsed.idToCanonicalKey.get(ch.novelId);
-    if (!key) continue;
-    const dbNovelId = keyToDbNovelId.get(key);
-    if (!dbNovelId) continue;
-    if (!chaptersByNovel.has(dbNovelId)) chaptersByNovel.set(dbNovelId, []);
-    chaptersByNovel.get(dbNovelId)!.push(ch);
-  }
-
   let chaptersImported = 0;
-  for (const [novelId, list] of chaptersByNovel.entries()) {
+  for (const [key, list] of parsed.chaptersByCanonicalKey.entries()) {
+    const novelId = keyToDbNovelId.get(key);
+    if (!novelId) continue;
     await chapterRepo.upsertChapters(
       db,
       novelId,
@@ -153,7 +200,7 @@ export async function importLnReaderZip(
     if (cat.name.toLowerCase() === 'default') continue;
     const shelf = await libraryRepo.createShelf(db, cat.name);
     shelvesImported++;
-    for (const oldNovelId of cat.novelIds ?? []) {
+    for (const oldNovelId of Array.isArray(cat.novelIds) ? cat.novelIds : []) {
       const key = parsed.idToCanonicalKey.get(oldNovelId);
       const dbNovelId = key ? keyToDbNovelId.get(key) : undefined;
       if (dbNovelId) {

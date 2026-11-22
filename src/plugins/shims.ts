@@ -1,4 +1,4 @@
-import * as cheerio from 'cheerio';
+import * as cheerio from 'cheerio/slim';
 import * as htmlparser2 from 'htmlparser2';
 import dayjs from 'dayjs';
 import { PluginHttpError, type FetchLike, type PluginKeyValueStorage } from './types';
@@ -94,6 +94,7 @@ export function createPluginShims(opts: {
 
   return {
     cheerio,
+    'cheerio/slim': cheerio,
     htmlparser2,
     dayjs,
     urlencode: urlencodeShim,
@@ -102,6 +103,7 @@ export function createPluginShims(opts: {
       fetchText,
       fetchFile: fetchText,
       fetchProto: fetchApi,
+      fetchViaWebview: fetchApi,
     },
     '@libs/storage': storageShim,
     '@libs/novelStatus': { NovelStatus },
@@ -109,5 +111,8 @@ export function createPluginShims(opts: {
     '@libs/isAbsoluteUrl': { isUrlAbsolute },
     '@libs/defaultCover': { defaultCover: '' },
     '@libs/pluginBase': { PluginBase: class PluginBase {} },
+    '@libs/utils': {
+      sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+    },
   };
 }

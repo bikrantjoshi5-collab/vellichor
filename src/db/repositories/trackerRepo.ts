@@ -69,19 +69,48 @@ export const trackerRepo = {
     return db.getAllAsync<TrackerLinkRow>('SELECT * FROM tracker_links WHERE pending_sync = 1');
   },
 
-  async setPendingSync(db: SqlExecutor, linkId: number, pending: boolean, syncedChapter?: number): Promise<void> {
+  async setPendingSync(
+    db: SqlExecutor,
+    linkId: number,
+    pending: boolean,
+    syncedChapter?: number,
+    pendingChapter?: number | null
+  ): Promise<void> {
     if (syncedChapter !== undefined) {
       await db.runAsync(
-        'UPDATE tracker_links SET pending_sync = ?, last_chapter_synced = ?, updated_at = ? WHERE id = ?',
-        [pending ? 1 : 0, syncedChapter, Date.now(), linkId]
+        'UPDATE tracker_links SET pending_sync = ?, last_chapter_synced = ?, pending_chapter = ?, updated_at = ? WHERE id = ?',
+        [pending ? 1 : 0, syncedChapter, pending ? (pendingChapter ?? null) : null, Date.now(), linkId]
       );
     } else {
-      await db.runAsync('UPDATE tracker_links SET pending_sync = ?, updated_at = ? WHERE id = ?', [
-        pending ? 1 : 0,
+      await db.runAsync(
+        'UPDATE tracker_links SET pending_sync = ?, pending_chapter = ?, updated_at = ? WHERE id = ?',
+        [pending ? 1 : 0, pending ? (pendingChapter ?? null) : null, Date.now(), linkId]
+      );
+    }
+  },
+
+  async updateLinkTuning(
+    db: SqlExecutor,
+    linkId: number,
+    tuning: { chapterOffset?: number; volumeProgress?: number; score?: number; status?: ReadingStatus }
+  ): Promise<void> {
+    await db.runAsync(
+      `UPDATE tracker_links SET
+        chapter_offset = COALESCE(?, chapter_offset),
+        volume_progress = COALESCE(?, volume_progress),
+        score = COALESCE(?, score),
+        status = COALESCE(?, status),
+        updated_at = ?
+      WHERE id = ?`,
+      [
+        tuning.chapterOffset ?? null,
+        tuning.volumeProgress ?? null,
+        tuning.score ?? null,
+        tuning.status ?? null,
         Date.now(),
         linkId,
-      ]);
-    }
+      ]
+    );
   },
 
   async removeLink(db: SqlExecutor, novelId: number, provider: TrackerProvider): Promise<void> {

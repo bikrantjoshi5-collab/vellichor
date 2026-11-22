@@ -33,7 +33,10 @@ export interface PluginRow {
   version: string;
   remote_version: string;
   bundle_hash: string | null;
+  installed_manifest_hash: string | null;
   remote_hash: string | null;
+  installed_etag: string | null;
+  remote_etag: string | null;
   icon_url: string | null;
   file_url: string;
   local_path: string | null;
@@ -122,6 +125,7 @@ export interface TrackerLinkRow {
   chapter_offset: number;
   score: number;
   pending_sync: number;
+  pending_chapter: number | null;
   updated_at: number;
 }
 
