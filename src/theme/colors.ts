@@ -20,6 +20,47 @@ export const mossColors = {
   coverPlaceholderAccent: '#7DC4A0',
 } as const;
 
+export type LabelColorToken = 'terracotta' | 'mint' | 'ochre' | 'sage' | 'slate' | 'plum';
+
+export const labelPalette: Record<LabelColorToken, { dot: string; bg: string; fg: string; name: string }> = {
+  terracotta: {
+    dot: '#E08E6D',
+    bg: 'rgba(224, 142, 109, 0.16)',
+    fg: '#F2B59B',
+    name: 'Terracotta',
+  },
+  mint: {
+    dot: '#7DC4A0',
+    bg: 'rgba(125, 196, 160, 0.16)',
+    fg: '#A2DBBE',
+    name: 'Lichen Mint',
+  },
+  ochre: {
+    dot: '#E9B44C',
+    bg: 'rgba(233, 180, 76, 0.16)',
+    fg: '#F3CC7E',
+    name: 'Amber Ochre',
+  },
+  sage: {
+    dot: '#8FB2A3',
+    bg: 'rgba(143, 178, 163, 0.16)',
+    fg: '#BFD6CC',
+    name: 'Forest Sage',
+  },
+  slate: {
+    dot: '#7FA6C9',
+    bg: 'rgba(127, 166, 201, 0.16)',
+    fg: '#ADC9E3',
+    name: 'Dusk Blue',
+  },
+  plum: {
+    dot: '#C295B8',
+    bg: 'rgba(194, 149, 184, 0.16)',
+    fg: '#DCBBD4',
+    name: 'Plum Mist',
+  },
+};
+
 export type ReaderSurfaceId = 'moss' | 'paper' | 'oled';
 
 export interface ReaderSurfacePalette {

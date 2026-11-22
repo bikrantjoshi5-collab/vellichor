@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { ArrowLeft, Search, SlidersHorizontal, X } from 'lucide-react-native';
+import { ArrowLeft, Clock, Flame, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react-native';
 import { mossColors, motion, radius, spacing } from '@/theme';
 import { useAppStore } from '@/store/appStore';
 import { getRuntimePlugin } from '@/services/pluginLoader';
@@ -16,6 +16,31 @@ import { Button } from '@/components/Button';
 import { NovelCover } from '@/components/NovelCover';
 import { ExtensionLogo } from '@/components/ExtensionLogo';
 import { SourceFilterSheet } from '@/components/SourceFilterSheet';
+
+type BrowseMode = 'popular' | 'latest' | 'filter';
+
+interface SourceNovelCardProps {
+  item: PluginNovelItem;
+  opening: boolean;
+  onPress: (item: PluginNovelItem) => void;
+}
+
+const SourceNovelCard = memo(function SourceNovelCard({ item, opening, onPress }: SourceNovelCardProps) {
+  return (
+    <Pressable
+      onPress={() => onPress(item)}
+      style={({ pressed }) => [
+        styles.card,
+        pressed && { transform: [{ scale: motion.pressScale }] },
+      ]}
+    >
+      <NovelCover uri={item.cover} title={item.name} style={styles.cover} />
+      <ThemedText variant="cardTitle" numberOfLines={2}>
+        {opening ? 'Opening…' : item.name}
+      </ThemedText>
+    </Pressable>
+  );
+});
 
 export default function SourceBrowseScreen() {
   const { pluginId } = useLocalSearchParams<{ pluginId: string }>();
@@ -31,15 +56,15 @@ export default function SourceBrowseScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
 
-  // Unlimited per-website dynamic filters
+  // Clean 3-option site navigation: Popular | Latest | Filter (unlimited per-website filters)
+  const [mode, setMode] = useState<BrowseMode>('popular');
   const [baseFilters, setBaseFilters] = useState<PluginFilters>({});
   const [activeFilters, setActiveFilters] = useState<PluginFilters>({});
-  const [showLatestNovels, setShowLatestNovels] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   const activeFilterCount = useMemo(
-    () => countActiveFilters(activeFilters, baseFilters) + (showLatestNovels ? 1 : 0),
-    [activeFilters, baseFilters, showLatestNovels]
+    () => countActiveFilters(activeFilters, baseFilters),
+    [activeFilters, baseFilters]
   );
 
   const resolveCover = (cover: string | undefined, site: string): string | undefined => {
@@ -53,8 +78,8 @@ export default function SourceBrowseScreen() {
   const fetchCatalog = async (opts: {
     pageNo: number;
     append: boolean;
+    modeOverride?: BrowseMode;
     filtersOverride?: PluginFilters;
-    latestOverride?: boolean;
     searchOverride?: string;
   }) => {
     if (!db || !pluginId) return;
@@ -72,9 +97,14 @@ export default function SourceBrowseScreen() {
         }
       }
 
+      const effectiveMode = opts.modeOverride ?? mode;
       const term = (opts.searchOverride ?? query).trim();
-      const filtersToUse = opts.filtersOverride ?? (Object.keys(activeFilters).length > 0 ? activeFilters : pluginBase);
-      const latestToUse = opts.latestOverride ?? showLatestNovels;
+      const baseOrEmpty = Object.keys(baseFilters).length > 0 ? baseFilters : pluginBase;
+      const filtersToUse =
+        effectiveMode === 'filter'
+          ? opts.filtersOverride ?? (Object.keys(activeFilters).length > 0 ? activeFilters : baseOrEmpty)
+          : baseOrEmpty;
+      const latestToUse = effectiveMode === 'latest';
 
       const res = term
         ? await plugin.searchNovels(term, opts.pageNo)
@@ -95,43 +125,72 @@ export default function SourceBrowseScreen() {
   };
 
   useEffect(() => {
-    void fetchCatalog({ pageNo: 1, append: false });
+    void fetchCatalog({ pageNo: 1, append: false, modeOverride: 'popular' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, pluginId]);
 
-  const openNovel = async (item: PluginNovelItem) => {
-    if (!db || !pluginId) return;
-    setOpeningPath(item.path);
-    try {
-      const plugin = await getRuntimePlugin(db, pluginId);
-      if (!plugin) throw new Error('Extension not installed');
-      const parsed = await plugin.parseNovel(item.path);
-      const novelId = await libraryRepo.upsertNovel(db, {
-        pluginId,
-        path: item.path,
-        title: parsed.name || item.name,
-        author: parsed.author ?? null,
-        coverUrl: resolveCover(parsed.cover, plugin.site) || item.cover || null,
-        summary: parsed.summary ?? null,
-        sourceStatus: parsed.status ?? null,
-      });
-      await chapterRepo.upsertChapters(
-        db,
-        novelId,
-        parsed.chapters.map((c, idx) => ({
-          path: c.path,
-          name: c.name,
-          chapterNumber: c.chapterNumber ?? idx + 1,
-          releaseDate: c.releaseTime ?? null,
-        }))
-      );
-      router.push({ pathname: '/novel/[id]', params: { id: String(novelId) } });
-    } catch (err) {
-      Alert.alert('Unable to Open Novel', err instanceof Error ? err.message : 'Parse failed');
-    } finally {
-      setOpeningPath(null);
+  const handleSelectMode = (nextMode: BrowseMode) => {
+    if (nextMode === 'filter') {
+      setFilterSheetOpen(true);
+      return;
     }
+    setMode(nextMode);
+    setQuery('');
+    void fetchCatalog({
+      pageNo: 1,
+      append: false,
+      modeOverride: nextMode,
+      searchOverride: '',
+    });
   };
+
+  const openNovel = useCallback(
+    async (item: PluginNovelItem) => {
+      if (!db || !pluginId) return;
+      setOpeningPath(item.path);
+      try {
+        const plugin = await getRuntimePlugin(db, pluginId);
+        if (!plugin) throw new Error('Extension not installed');
+        const parsed = await plugin.parseNovel(item.path);
+        const novelId = await libraryRepo.upsertNovel(db, {
+          pluginId,
+          path: item.path,
+          title: parsed.name || item.name,
+          author: parsed.author ?? null,
+          coverUrl: resolveCover(parsed.cover, plugin.site) || item.cover || null,
+          summary: parsed.summary ?? null,
+          sourceStatus: parsed.status ?? null,
+        });
+        await chapterRepo.upsertChapters(
+          db,
+          novelId,
+          parsed.chapters.map((c, idx) => ({
+            path: c.path,
+            name: c.name,
+            chapterNumber: c.chapterNumber ?? idx + 1,
+            releaseDate: c.releaseTime ?? null,
+          }))
+        );
+        router.push({ pathname: '/novel/[id]', params: { id: String(novelId) } });
+      } catch (err) {
+        Alert.alert('Unable to Open Novel', err instanceof Error ? err.message : 'Parse failed');
+      } finally {
+        setOpeningPath(null);
+      }
+    },
+    [db, pluginId, router]
+  );
+
+  const renderCard = useCallback(
+    ({ item }: { item: PluginNovelItem }) => (
+      <SourceNovelCard
+        item={item}
+        opening={openingPath === item.path}
+        onPress={(n) => void openNovel(n)}
+      />
+    ),
+    [openingPath, openNovel]
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -143,25 +202,6 @@ export default function SourceBrowseScreen() {
         <ThemedText variant="sectionTitle" style={{ flex: 1 }} numberOfLines={1}>
           {meta?.name || pluginId}
         </ThemedText>
-        <Pressable
-          testID="source-filter-open"
-          accessibilityRole="button"
-          accessibilityLabel="Open website filters"
-          onPress={() => setFilterSheetOpen(true)}
-          style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]}
-        >
-          <SlidersHorizontal
-            size={16}
-            color={activeFilterCount > 0 ? mossColors.accentFg : mossColors.fg}
-            strokeWidth={1.9}
-          />
-          <ThemedText
-            variant="caption"
-            style={{ color: activeFilterCount > 0 ? mossColors.accentFg : mossColors.fg }}
-          >
-            {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
-          </ThemedText>
-        </Pressable>
       </View>
 
       <View style={styles.searchRow}>
@@ -189,6 +229,111 @@ export default function SourceBrowseScreen() {
         <Button title="Go" size="sm" onPress={() => void fetchCatalog({ pageNo: 1, append: false })} />
       </View>
 
+      {/* 3-Option Site Mode Switcher: Popular | Latest | Filter */}
+      <View style={styles.modeRow}>
+        <Pressable
+          testID="source-mode-popular"
+          accessibilityRole="button"
+          accessibilityState={{ selected: mode === 'popular' && !query.trim() }}
+          onPress={() => handleSelectMode('popular')}
+          style={[styles.modeBtn, mode === 'popular' && !query.trim() && styles.modeBtnActive]}
+        >
+          <Flame
+            size={15}
+            color={mode === 'popular' && !query.trim() ? mossColors.accentFg : mossColors.muted}
+            strokeWidth={1.9}
+          />
+          <ThemedText
+            variant="caption"
+            style={{
+              color: mode === 'popular' && !query.trim() ? mossColors.accentFg : mossColors.muted,
+            }}
+          >
+            Popular
+          </ThemedText>
+        </Pressable>
+
+        <Pressable
+          testID="source-mode-latest"
+          accessibilityRole="button"
+          accessibilityState={{ selected: mode === 'latest' && !query.trim() }}
+          onPress={() => handleSelectMode('latest')}
+          style={[styles.modeBtn, mode === 'latest' && !query.trim() && styles.modeBtnActive]}
+        >
+          <Clock
+            size={15}
+            color={mode === 'latest' && !query.trim() ? mossColors.accentFg : mossColors.muted}
+            strokeWidth={1.9}
+          />
+          <ThemedText
+            variant="caption"
+            style={{
+              color: mode === 'latest' && !query.trim() ? mossColors.accentFg : mossColors.muted,
+            }}
+          >
+            Latest
+          </ThemedText>
+        </Pressable>
+
+        <Pressable
+          testID="source-filter-open"
+          accessibilityRole="button"
+          accessibilityState={{ selected: mode === 'filter' && !query.trim() }}
+          onPress={() => handleSelectMode('filter')}
+          style={[styles.modeBtn, mode === 'filter' && !query.trim() && styles.modeBtnActive]}
+        >
+          <SlidersHorizontal
+            size={15}
+            color={mode === 'filter' && !query.trim() ? mossColors.accentFg : mossColors.muted}
+            strokeWidth={1.9}
+          />
+          <ThemedText
+            variant="caption"
+            style={{
+              color: mode === 'filter' && !query.trim() ? mossColors.accentFg : mossColors.muted,
+            }}
+          >
+            {activeFilterCount > 0 ? `Filter (${activeFilterCount})` : 'Filter'}
+          </ThemedText>
+        </Pressable>
+      </View>
+
+      {mode === 'filter' && !query.trim() ? (
+        <View style={styles.filterBanner}>
+          <ThemedText variant="caption" style={{ flex: 1, color: mossColors.fg }} numberOfLines={1}>
+            {activeFilterCount > 0
+              ? `Manual filters active (${activeFilterCount} applied)`
+              : 'Showing manual filter results'}
+          </ThemedText>
+          <Pressable
+            onPress={() => setFilterSheetOpen(true)}
+            style={styles.filterBannerBtn}
+          >
+            <SlidersHorizontal size={13} color={mossColors.accent} strokeWidth={1.9} />
+            <ThemedText variant="caption" style={{ color: mossColors.accent }}>
+              Edit
+            </ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              const fresh = resetFilters(baseFilters);
+              setActiveFilters(fresh);
+              setMode('popular');
+              void fetchCatalog({
+                pageNo: 1,
+                append: false,
+                modeOverride: 'popular',
+                filtersOverride: fresh,
+              });
+            }}
+            style={styles.filterBannerBtn}
+          >
+            <RotateCcw size={13} color={mossColors.muted} strokeWidth={1.9} />
+            <ThemedText variant="caption">Reset</ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={mossColors.accent} />
@@ -198,22 +343,10 @@ export default function SourceBrowseScreen() {
           data={items}
           numColumns={2}
           estimatedItemSize={240}
+          extraData={openingPath}
           keyExtractor={(item, idx) => `${item.path}-${idx}`}
           contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => void openNovel(item)}
-              style={({ pressed }) => [
-                styles.card,
-                pressed && { transform: [{ scale: motion.pressScale }] },
-              ]}
-            >
-              <NovelCover uri={item.cover} title={item.name} style={styles.cover} />
-              <ThemedText variant="cardTitle" numberOfLines={2}>
-                {openingPath === item.path ? 'Opening…' : item.name}
-              </ThemedText>
-            </Pressable>
-          )}
+          renderItem={renderCard}
           ListFooterComponent={
             items.length > 0 ? (
               <View style={styles.footerMore}>
@@ -233,21 +366,20 @@ export default function SourceBrowseScreen() {
         visible={filterSheetOpen}
         sourceName={meta?.name || String(pluginId)}
         filters={activeFilters}
-        showLatestNovels={showLatestNovels}
+        hideLatestToggle
         onChangeFilters={setActiveFilters}
-        onChangeShowLatest={setShowLatestNovels}
         onReset={() => {
           const fresh = resetFilters(baseFilters);
           setActiveFilters(fresh);
-          setShowLatestNovels(false);
         }}
         onApply={() => {
           setQuery('');
+          setMode('filter');
           void fetchCatalog({
             pageNo: 1,
             append: false,
+            modeOverride: 'filter',
             filtersOverride: activeFilters,
-            latestOverride: showLatestNovels,
             searchOverride: '',
           });
         }}
@@ -277,24 +409,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  filterBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.smd,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    backgroundColor: mossColors.surface,
-  },
-  filterBtnActive: {
-    backgroundColor: mossColors.accent,
-  },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     marginHorizontal: spacing.md,
-    marginBottom: spacing.smd,
+    marginBottom: spacing.sm,
     paddingHorizontal: spacing.smd,
     paddingVertical: spacing.xs,
     borderRadius: radius.md,
@@ -305,6 +425,47 @@ const styles = StyleSheet.create({
     color: mossColors.fg,
     fontSize: 14,
     paddingVertical: spacing.sm,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    padding: 4,
+    borderRadius: radius.md,
+    backgroundColor: mossColors.surface,
+    gap: 4,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: spacing.sm + 1,
+    borderRadius: radius.sm + 2,
+  },
+  modeBtnActive: {
+    backgroundColor: mossColors.accent,
+  },
+  filterBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.smd,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: mossColors.surfaceElevated,
+  },
+  filterBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    backgroundColor: mossColors.surface,
   },
   center: {
     flex: 1,

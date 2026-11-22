@@ -1,15 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import * as Speech from 'expo-speech';
-import { X } from 'lucide-react-native';
+import { Minus, Plus, Volume2, X } from 'lucide-react-native';
 import {
   mossColors,
+  motion,
   radius,
   readerSurfaces,
   spacing,
   type ReaderSurfaceId,
 } from '@/theme';
 import type { ReaderPrefs } from '@/store/appStore';
+import {
+  rankAndLabelVoices,
+  TTS_PITCH_PRESETS,
+  TTS_SPEED_PRESETS,
+  type CleanVoiceOption,
+} from '@/reader/voiceCatalog';
 import { ThemedText } from './ThemedText';
 import { Chip } from './Chip';
 
@@ -33,14 +40,35 @@ export function ReaderSettingsSheet({
   onUpdatePrefs,
   onClose,
 }: ReaderSettingsSheetProps) {
-  const [voices, setVoices] = useState<Speech.Voice[]>([]);
+  const [voices, setVoices] = useState<CleanVoiceOption[]>([]);
+  const [showAllVoices, setShowAllVoices] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     void Speech.getAvailableVoicesAsync()
-      .then((list) => setVoices(list.filter((v) => v.language.toLowerCase().startsWith('en')).slice(0, 8)))
+      .then((list) => {
+        const ranked = rankAndLabelVoices(list, {
+          includeAllLanguages: showAllVoices,
+          maxCount: showAllVoices ? 30 : 14,
+        });
+        setVoices(ranked);
+      })
       .catch(() => {});
-  }, [visible]);
+  }, [visible, showAllVoices]);
+
+  const previewVoice = (voiceId?: string) => {
+    Speech.stop();
+    Speech.speak('The lamp glowed softly as the next chapter began.', {
+      voice: voiceId,
+      rate: prefs.ttsRate,
+      pitch: prefs.ttsPitch,
+    });
+  };
+
+  const nudgeRate = (delta: number) => {
+    const next = Math.round(Math.max(0.75, Math.min(2.0, prefs.ttsRate + delta)) * 100) / 100;
+    onUpdatePrefs({ ttsRate: next });
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -62,6 +90,7 @@ export function ReaderSettingsSheet({
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
+            {/* Voice Read-Aloud Toggle */}
             <View style={styles.row}>
               <View style={styles.rowText}>
                 <ThemedText variant="cardTitle">Voice Read-Aloud (TTS)</ThemedText>
@@ -78,25 +107,153 @@ export function ReaderSettingsSheet({
               />
             </View>
 
-            {ttsEnabled && voices.length > 0 ? (
-              <View style={styles.section}>
+            {/* Explicit Reading Speed Control (always accessible so user can set preferred speed cleanly) */}
+            <View style={styles.section}>
+              <View style={styles.speedHeader}>
                 <ThemedText variant="caption" style={styles.sectionLabel}>
-                  Voice Profile
+                  Chapter Reading Speed
                 </ThemedText>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                <View style={styles.nudgeRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Decrease reading speed"
+                    onPress={() => nudgeRate(-0.05)}
+                    style={styles.nudgeBtn}
+                  >
+                    <Minus size={14} color={mossColors.fg} strokeWidth={2} />
+                  </Pressable>
+                  <ThemedText variant="mono" style={{ color: mossColors.accent }}>
+                    {prefs.ttsRate.toFixed(2).replace(/0$/, '')}x
+                  </ThemedText>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Increase reading speed"
+                    onPress={() => nudgeRate(0.05)}
+                    style={styles.nudgeBtn}
+                  >
+                    <Plus size={14} color={mossColors.fg} strokeWidth={2} />
+                  </Pressable>
+                </View>
+              </View>
+              <View style={styles.chipRow}>
+                {TTS_SPEED_PRESETS.map((spd) => (
                   <Chip
-                    label="System Default"
-                    active={!prefs.ttsVoice}
-                    onPress={() => onUpdatePrefs({ ttsVoice: undefined })}
+                    key={spd}
+                    label={`${spd}x`}
+                    active={Math.abs(prefs.ttsRate - spd) < 0.01}
+                    onPress={() => onUpdatePrefs({ ttsRate: spd })}
                   />
-                  {voices.map((v) => (
-                    <Chip
-                      key={v.identifier}
-                      label={v.name || v.identifier}
-                      active={prefs.ttsVoice === v.identifier}
-                      onPress={() => onUpdatePrefs({ ttsVoice: v.identifier })}
-                    />
-                  ))}
+                ))}
+              </View>
+            </View>
+
+            {/* Voice Tone / Pitch */}
+            <View style={styles.section}>
+              <ThemedText variant="caption" style={styles.sectionLabel}>
+                Voice Tone
+              </ThemedText>
+              <View style={styles.chipRow}>
+                {TTS_PITCH_PRESETS.map((p) => (
+                  <Chip
+                    key={p.label}
+                    label={p.label}
+                    active={Math.abs(prefs.ttsPitch - p.value) < 0.02}
+                    onPress={() => onUpdatePrefs({ ttsPitch: p.value })}
+                  />
+                ))}
+              </View>
+            </View>
+
+            {/* Clean Ranked Voices with Preview */}
+            {voices.length > 0 ? (
+              <View style={styles.section}>
+                <View style={styles.speedHeader}>
+                  <ThemedText variant="caption" style={styles.sectionLabel}>
+                    Narrator Voice ({voices.length} clean voices)
+                  </ThemedText>
+                  <Pressable onPress={() => setShowAllVoices((v) => !v)}>
+                    <ThemedText variant="caption" style={{ color: mossColors.accent }}>
+                      {showAllVoices ? 'English HD' : 'All Languages'}
+                    </ThemedText>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.voiceCardsRow}
+                >
+                  <Pressable
+                    onPress={() => {
+                      onUpdatePrefs({ ttsVoice: undefined });
+                      previewVoice(undefined);
+                    }}
+                    style={({ pressed }) => [
+                      styles.voiceCard,
+                      !prefs.ttsVoice && styles.voiceCardActive,
+                      pressed && { transform: [{ scale: motion.pressScale }] },
+                    ]}
+                  >
+                    <View style={styles.voiceTop}>
+                      <ThemedText
+                        variant="cardTitle"
+                        style={{ color: !prefs.ttsVoice ? mossColors.accentFg : mossColors.fg }}
+                        numberOfLines={1}
+                      >
+                        System Best
+                      </ThemedText>
+                      <Volume2
+                        size={14}
+                        color={!prefs.ttsVoice ? mossColors.accentFg : mossColors.muted}
+                        strokeWidth={1.9}
+                      />
+                    </View>
+                    <ThemedText
+                      variant="caption"
+                      style={{ color: !prefs.ttsVoice ? mossColors.accentFg : mossColors.muted }}
+                    >
+                      Auto · Tap to preview
+                    </ThemedText>
+                  </Pressable>
+
+                  {voices.map((v) => {
+                    const selected = prefs.ttsVoice === v.identifier;
+                    return (
+                      <Pressable
+                        key={v.identifier}
+                        onPress={() => {
+                          onUpdatePrefs({ ttsVoice: v.identifier });
+                          previewVoice(v.identifier);
+                        }}
+                        style={({ pressed }) => [
+                          styles.voiceCard,
+                          selected && styles.voiceCardActive,
+                          pressed && { transform: [{ scale: motion.pressScale }] },
+                        ]}
+                      >
+                        <View style={styles.voiceTop}>
+                          <ThemedText
+                            variant="cardTitle"
+                            style={{ color: selected ? mossColors.accentFg : mossColors.fg, flex: 1 }}
+                            numberOfLines={1}
+                          >
+                            {v.displayName}
+                          </ThemedText>
+                          <Volume2
+                            size={14}
+                            color={selected ? mossColors.accentFg : v.isNeural ? mossColors.good : mossColors.muted}
+                            strokeWidth={1.9}
+                          />
+                        </View>
+                        <ThemedText
+                          variant="caption"
+                          style={{ color: selected ? mossColors.accentFg : mossColors.muted }}
+                          numberOfLines={1}
+                        >
+                          {v.subtitle}
+                        </ThemedText>
+                      </Pressable>
+                    );
+                  })}
                 </ScrollView>
               </View>
             ) : null}
@@ -198,7 +355,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.smd,
     paddingBottom: spacing.xl,
-    maxHeight: '80%',
+    maxHeight: '86%',
   },
   handle: {
     width: 40,
@@ -245,9 +402,47 @@ const styles = StyleSheet.create({
   sectionLabel: {
     color: mossColors.muted,
   },
+  speedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  nudgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  nudgeBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.sm,
+    backgroundColor: mossColors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  voiceCardsRow: {
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  voiceCard: {
+    width: 172,
+    padding: spacing.smd,
+    borderRadius: radius.md,
+    backgroundColor: mossColors.surface,
+    gap: 4,
+  },
+  voiceCardActive: {
+    backgroundColor: mossColors.accent,
+  },
+  voiceTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
   },
 });

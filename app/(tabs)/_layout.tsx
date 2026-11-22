@@ -38,7 +38,11 @@ export default function TabsLayout() {
         options={{
           title: 'Library',
           tabBarButtonTestID: 'tab-library',
-          tabBarIcon: ({ color, size }) => <BookOpen size={size - 2} color={color} strokeWidth={1.8} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <View style={[styles.iconPill, focused && styles.iconPillActive]}>
+              <BookOpen size={size - 3} color={color} strokeWidth={focused ? 2 : 1.75} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
@@ -46,7 +50,11 @@ export default function TabsLayout() {
         options={{
           title: 'Updates',
           tabBarButtonTestID: 'tab-updates',
-          tabBarIcon: ({ color, size }) => <Bell size={size - 2} color={color} strokeWidth={1.8} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <View style={[styles.iconPill, focused && styles.iconPillActive]}>
+              <Bell size={size - 3} color={color} strokeWidth={focused ? 2 : 1.75} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
@@ -54,9 +62,9 @@ export default function TabsLayout() {
         options={{
           title: 'Sources',
           tabBarButtonTestID: 'tab-sources',
-          tabBarIcon: ({ color, size }) => (
-            <View>
-              <Compass size={size - 2} color={color} strokeWidth={1.8} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <View style={[styles.iconPill, focused && styles.iconPillActive]}>
+              <Compass size={size - 3} color={color} strokeWidth={focused ? 2 : 1.75} />
               {outdatedCount > 0 ? <View style={styles.updateDot} /> : null}
             </View>
           ),
@@ -67,8 +75,10 @@ export default function TabsLayout() {
         options={{
           title: 'More',
           tabBarButtonTestID: 'tab-more',
-          tabBarIcon: ({ color, size }) => (
-            <SlidersHorizontal size={size - 2} color={color} strokeWidth={1.8} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <View style={[styles.iconPill, focused && styles.iconPillActive]}>
+              <SlidersHorizontal size={size - 3} color={color} strokeWidth={focused ? 2 : 1.75} />
+            </View>
           ),
         }}
       />
@@ -81,18 +91,29 @@ const styles = StyleSheet.create({
     backgroundColor: mossColors.surface,
     borderTopWidth: 1,
     borderTopColor: mossColors.border,
-    height: 64,
-    paddingBottom: 8,
+    height: 68,
+    paddingBottom: 9,
     paddingTop: 6,
   },
   tabLabel: {
     fontFamily: fontFamilies.uiMedium,
     fontSize: 11,
+    marginTop: 2,
+  },
+  iconPill: {
+    width: 48,
+    height: 30,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconPillActive: {
+    backgroundColor: mossColors.surfaceElevated,
   },
   updateDot: {
     position: 'absolute',
-    top: -1,
-    right: -3,
+    top: 4,
+    right: 11,
     width: 7,
     height: 7,
     borderRadius: radius.full,

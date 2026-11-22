@@ -40,6 +40,7 @@ export interface ReaderPrefs {
   tapZonesEnabled: boolean;
   keepScreenAwake: boolean;
   ttsRate: number;
+  ttsPitch: number;
   ttsVoice?: string;
 }
 
@@ -51,6 +52,7 @@ const DEFAULT_READER_PREFS: ReaderPrefs = {
   tapZonesEnabled: true,
   keepScreenAwake: false,
   ttsRate: 1.0,
+  ttsPitch: 1.0,
   ttsVoice: undefined,
 };
 
@@ -61,6 +63,7 @@ interface AppStoreState {
 
   novels: NovelWithStats[];
   shelves: ShelfRow[];
+  novelLabels: Record<number, ShelfRow[]>;
   updates: ChapterUpdateRow[];
   repos: RepoRow[];
   plugins: PluginRow[];
@@ -85,8 +88,10 @@ interface AppStoreState {
 
   setFilter: (filter: ReadingStatus | 'all' | 'downloaded', shelfId?: number | null) => Promise<void>;
   setLibrarySearch: (q: string) => Promise<void>;
-  createShelf: (name: string) => Promise<void>;
+  createShelf: (name: string, colorToken?: string) => Promise<void>;
+  renameShelf: (id: number, name: string, colorToken?: string) => Promise<void>;
   deleteShelf: (id: number) => Promise<void>;
+  toggleNovelLabel: (novelId: number, shelfId: number) => Promise<void>;
 
   addRepoUrl: (url: string, name?: string) => Promise<void>;
   removeRepo: (repoId: number) => Promise<void>;
@@ -117,6 +122,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   novels: [],
   shelves: [],
+  novelLabels: {},
   updates: [],
   repos: [],
   plugins: [],
@@ -193,15 +199,16 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   async refreshLibrary() {
     const { db, activeFilter, activeShelfId, librarySearch } = get();
     if (!db) return;
-    const [novels, shelves] = await Promise.all([
+    const [novels, shelves, novelLabels] = await Promise.all([
       libraryRepo.listLibraryNovels(db, {
         readingStatus: activeShelfId ? 'all' : activeFilter,
         shelfId: activeShelfId,
         search: librarySearch,
       }),
       libraryRepo.listShelves(db),
+      libraryRepo.getLibraryLabelMap(db),
     ]);
-    set({ novels, shelves });
+    set({ novels, shelves, novelLabels });
   },
 
   async refreshUpdates() {
@@ -235,10 +242,17 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     await get().refreshLibrary();
   },
 
-  async createShelf(name) {
+  async createShelf(name, colorToken = 'terracotta') {
     const { db } = get();
     if (!db || !name.trim()) return;
-    await libraryRepo.createShelf(db, name.trim());
+    await libraryRepo.createShelf(db, name.trim(), colorToken);
+    await get().refreshLibrary();
+  },
+
+  async renameShelf(id, name, colorToken) {
+    const { db } = get();
+    if (!db || !name.trim()) return;
+    await libraryRepo.renameShelf(db, id, name.trim(), colorToken);
     await get().refreshLibrary();
   },
 
@@ -247,6 +261,18 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     if (!db) return;
     await libraryRepo.deleteShelf(db, id);
     if (activeShelfId === id) set({ activeShelfId: null });
+    await get().refreshLibrary();
+  },
+
+  async toggleNovelLabel(novelId, shelfId) {
+    const { db, novelLabels } = get();
+    if (!db) return;
+    const assigned = (novelLabels[novelId] ?? []).some((s) => s.id === shelfId);
+    if (assigned) {
+      await libraryRepo.removeNovelFromShelf(db, novelId, shelfId);
+    } else {
+      await libraryRepo.assignNovelToShelf(db, novelId, shelfId);
+    }
     await get().refreshLibrary();
   },
 

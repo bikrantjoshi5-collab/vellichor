@@ -1,4 +1,5 @@
 import type { ChapterBlock } from './chapterParser';
+import { sanitizeForSpeech } from './voiceCatalog';
 
 export interface SpeechSpeakOptions {
   rate: number;
@@ -22,6 +23,7 @@ export interface TtsState {
   playing: boolean;
   activeBlockIndex: number | null;
   rate: number;
+  pitch: number;
   voice?: string;
 }
 
@@ -31,11 +33,12 @@ export interface TtsListenerOptions {
   onChapterComplete?: () => void;
 }
 
-function isSpeakableBlock(block: ChapterBlock): block is { type: 'heading' | 'paragraph' | 'blockquote'; text: string } {
-  return (
-    (block.type === 'paragraph' || block.type === 'heading' || block.type === 'blockquote') &&
-    block.text.trim().length > 0
-  );
+function getSpeakableText(block: ChapterBlock): string | null {
+  if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'blockquote') {
+    return null;
+  }
+  const clean = sanitizeForSpeech(block.text);
+  return clean.length > 0 ? clean : null;
 }
 
 export class TtsController {
@@ -47,6 +50,7 @@ export class TtsController {
     playing: false,
     activeBlockIndex: null,
     rate: 1.0,
+    pitch: 1.0,
     voice: undefined,
   };
   private generation = 0;
@@ -143,8 +147,18 @@ export class TtsController {
   }
 
   setRate(rate: number): void {
-    const clamped = Math.max(0.75, Math.min(2.0, rate));
+    const clamped = Math.round(Math.max(0.75, Math.min(2.0, rate)) * 100) / 100;
     this.state = { ...this.state, rate: clamped };
+    if (this.state.playing && this.state.activeBlockIndex !== null) {
+      this.speakAt(this.state.activeBlockIndex);
+    } else {
+      this.emit();
+    }
+  }
+
+  setPitch(pitch: number): void {
+    const clamped = Math.round(Math.max(0.8, Math.min(1.2, pitch)) * 100) / 100;
+    this.state = { ...this.state, pitch: clamped };
     if (this.state.playing && this.state.activeBlockIndex !== null) {
       this.speakAt(this.state.activeBlockIndex);
     } else {
@@ -168,21 +182,22 @@ export class TtsController {
 
   private findNextSpeakable(start: number): number | null {
     for (let i = Math.max(0, start); i < this.blocks.length; i++) {
-      if (isSpeakableBlock(this.blocks[i])) return i;
+      if (getSpeakableText(this.blocks[i])) return i;
     }
     return null;
   }
 
   private findPrevSpeakable(start: number): number | null {
     for (let i = Math.min(start, this.blocks.length - 1); i >= 0; i--) {
-      if (isSpeakableBlock(this.blocks[i])) return i;
+      if (getSpeakableText(this.blocks[i])) return i;
     }
     return null;
   }
 
   private speakAt(index: number): void {
     const block = this.blocks[index];
-    if (!block || !isSpeakableBlock(block)) return;
+    const cleanText = block ? getSpeakableText(block) : null;
+    if (!cleanText) return;
 
     this.generation++;
     const token = this.generation;
@@ -197,8 +212,8 @@ export class TtsController {
     this.emit();
 
     this.driver.speak(
-      block.text,
-      { rate: this.state.rate, voice: this.state.voice },
+      cleanText,
+      { rate: this.state.rate, pitch: this.state.pitch, voice: this.state.voice },
       {
         onDone: () => {
           if (token !== this.generation || !this.state.enabled) return;
@@ -232,6 +247,7 @@ export function createExpoSpeechDriver(): SpeechDriver {
       const Speech = require('expo-speech') as typeof import('expo-speech');
       Speech.speak(text, {
         rate: opts.rate,
+        pitch: opts.pitch ?? 1.0,
         voice: opts.voice,
         onDone: callbacks.onDone,
         onStopped: callbacks.onStopped,

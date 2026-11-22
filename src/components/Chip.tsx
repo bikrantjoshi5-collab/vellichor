@@ -1,17 +1,18 @@
 import React from 'react';
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { mossColors, motion, radius, spacing } from '@/theme';
 import { ThemedText } from './ThemedText';
 
 export interface ChipProps {
   label: string;
   active?: boolean;
+  dotColor?: string;
   testID?: string;
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
 }
 
-export function Chip({ label, active = false, testID, style, onPress }: ChipProps) {
+export function Chip({ label, active = false, dotColor, testID, style, onPress }: ChipProps) {
   return (
     <Pressable
       testID={testID}
@@ -26,6 +27,14 @@ export function Chip({ label, active = false, testID, style, onPress }: ChipProp
         style,
       ]}
     >
+      {dotColor ? (
+        <View
+          style={[
+            styles.dot,
+            { backgroundColor: active ? mossColors.accentFg : dotColor },
+          ]}
+        />
+      ) : null}
       <ThemedText
         variant="caption"
         style={{ color: active ? mossColors.accentFg : mossColors.muted }}
@@ -39,11 +48,18 @@ export function Chip({ label, active = false, testID, style, onPress }: ChipProp
 
 const styles = StyleSheet.create({
   chip: {
+    flexDirection: 'row',
+    gap: 6,
     paddingVertical: spacing.xs + 3,
     paddingHorizontal: spacing.smd + 2,
     borderRadius: radius.full,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: radius.full,
   },
   active: {
     backgroundColor: mossColors.accent,

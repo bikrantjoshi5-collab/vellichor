@@ -139,21 +139,62 @@ export const libraryRepo = {
     );
   },
 
-  async createShelf(db: SqlExecutor, name: string): Promise<ShelfRow> {
+  async createShelf(db: SqlExecutor, name: string, colorToken = 'terracotta'): Promise<ShelfRow> {
     const trimmed = name.trim();
     const existing = await db.getFirstAsync<ShelfRow>('SELECT * FROM shelves WHERE name = ?', [trimmed]);
     if (existing) return existing;
     const countRow = await db.getFirstAsync<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM shelves');
     const now = Date.now();
     const res = await db.runAsync(
-      'INSERT INTO shelves (name, sort_order, created_at) VALUES (?, ?, ?)',
-      [trimmed, countRow?.cnt ?? 0, now]
+      'INSERT INTO shelves (name, color_token, sort_order, created_at) VALUES (?, ?, ?, ?)',
+      [trimmed, colorToken, countRow?.cnt ?? 0, now]
     );
-    return { id: res.lastInsertRowId, name: trimmed, sort_order: countRow?.cnt ?? 0, created_at: now };
+    return {
+      id: res.lastInsertRowId,
+      name: trimmed,
+      color_token: colorToken,
+      sort_order: countRow?.cnt ?? 0,
+      created_at: now,
+    };
+  },
+
+  async renameShelf(db: SqlExecutor, shelfId: number, name: string, colorToken?: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (colorToken) {
+      await db.runAsync('UPDATE shelves SET name = ?, color_token = ? WHERE id = ?', [
+        trimmed,
+        colorToken,
+        shelfId,
+      ]);
+    } else {
+      await db.runAsync('UPDATE shelves SET name = ? WHERE id = ?', [trimmed, shelfId]);
+    }
   },
 
   async listShelves(db: SqlExecutor): Promise<ShelfRow[]> {
     return db.getAllAsync<ShelfRow>('SELECT * FROM shelves ORDER BY sort_order ASC, name ASC');
+  },
+
+  async getLibraryLabelMap(db: SqlExecutor): Promise<Record<number, ShelfRow[]>> {
+    const rows = await db.getAllAsync<ShelfRow & { novel_id: number }>(
+      `SELECT ns.novel_id, s.*
+       FROM novel_shelves ns
+       INNER JOIN shelves s ON s.id = ns.shelf_id
+       ORDER BY s.sort_order ASC, s.name ASC`
+    );
+    const map: Record<number, ShelfRow[]> = {};
+    for (const r of rows) {
+      if (!map[r.novel_id]) map[r.novel_id] = [];
+      map[r.novel_id].push({
+        id: r.id,
+        name: r.name,
+        color_token: r.color_token || 'terracotta',
+        sort_order: r.sort_order,
+        created_at: r.created_at,
+      });
+    }
+    return map;
   },
 
   async deleteShelf(db: SqlExecutor, shelfId: number): Promise<void> {

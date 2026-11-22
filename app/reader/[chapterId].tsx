@@ -13,8 +13,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { ArrowLeft, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react-native';
-import { fontFamilies, mossColors, radius, readerSurfaces, spacing } from '@/theme';
+import { ArrowLeft, ChevronLeft, ChevronRight, SlidersHorizontal, Volume2 } from 'lucide-react-native';
+import { fontFamilies, radius, readerSurfaces, spacing } from '@/theme';
 import { useAppStore } from '@/store/appStore';
 import { chapterRepo } from '@/db/repositories/chapterRepo';
 import { libraryRepo } from '@/db/repositories/libraryRepo';
@@ -24,6 +24,7 @@ import { getRuntimePlugin } from '@/services/pluginLoader';
 import { readChapterBlocksFromDisk } from '@/downloads/storage';
 import { parseChapterHtml, type ChapterBlock } from '@/reader/chapterParser';
 import { createExpoSpeechDriver, TtsController, type TtsState } from '@/reader/ttsController';
+import { TTS_SPEED_PRESETS } from '@/reader/voiceCatalog';
 import { syncTrackerProgress, pullRemoteProgressToLocal } from '@/trackers/syncService';
 import { fetchAniListProgress, pushAniListProgress } from '@/trackers/anilist';
 import { fetchMalProgress, pushMalProgress } from '@/trackers/mal';
@@ -34,7 +35,7 @@ import { ReaderSettingsSheet } from '@/components/ReaderSettingsSheet';
 import { TtsDockedBar } from '@/components/TtsDockedBar';
 import { IllustrationLightbox } from '@/components/IllustrationLightbox';
 
-const TTS_RATES = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+const TTS_RATES = [...TTS_SPEED_PRESETS];
 
 export default function ReaderScreen() {
   const { chapterId, autoPlayTts } = useLocalSearchParams<{ chapterId: string; autoPlayTts?: string }>();
@@ -60,12 +61,14 @@ export default function ReaderScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ uri: string; alt?: string } | null>(null);
   const [brokenImages, setBrokenImages] = useState<Record<number, boolean>>({});
+  const [progressPct, setProgressPct] = useState(0);
 
   const [ttsState, setTtsState] = useState<TtsState>({
     enabled: autoPlayTts === '1', // Strictly OFF by default; preserved ONLY on TTS chapter auto-advance
     playing: false,
     activeBlockIndex: null,
     rate: readerPrefs.ttsRate,
+    pitch: readerPrefs.ttsPitch,
     voice: readerPrefs.ttsVoice,
   });
 
@@ -107,8 +110,9 @@ export default function ReaderScreen() {
 
   useEffect(() => {
     ttsRef.current?.setRate(readerPrefs.ttsRate);
+    ttsRef.current?.setPitch(readerPrefs.ttsPitch);
     ttsRef.current?.setVoice(readerPrefs.ttsVoice);
-  }, [readerPrefs.ttsRate, readerPrefs.ttsVoice]);
+  }, [readerPrefs.ttsRate, readerPrefs.ttsPitch, readerPrefs.ttsVoice]);
 
   useEffect(() => {
     const keepOn = readerPrefs.keepScreenAwake || ttsState.playing;
@@ -224,6 +228,8 @@ export default function ReaderScreen() {
         setAdjacent(adj);
         setBlocks(parsed);
         setBrokenImages({});
+        progressPctRef.current = ch.read_progress_pct || 0;
+        setProgressPct(ch.read_progress_pct || 0);
         syncedChapterIdRef.current = ch.is_read === 1 ? ch.id : null;
         ttsRef.current?.loadBlocks(parsed, ch.scroll_paragraph_idx || 0);
         if (autoPlayTts === '1') {
@@ -287,7 +293,10 @@ export default function ReaderScreen() {
     viewportHeightRef.current = layoutMeasurement.height;
     const maxScroll = Math.max(1, contentSize.height - layoutMeasurement.height);
     const pct = Math.min(100, Math.round((contentOffset.y / maxScroll) * 100));
-    progressPctRef.current = pct;
+    if (pct !== progressPctRef.current) {
+      progressPctRef.current = pct;
+      setProgressPct(pct);
+    }
   };
 
   const handleScrollEnd = () => {
@@ -503,6 +512,79 @@ export default function ReaderScreen() {
         </ScrollView>
       )}
 
+      {/* Clean bottom chapter navigation & progress bar when reader chrome is toggled visible */}
+      {chromeVisible && !loading && !errorText && !ttsState.enabled ? (
+        <View
+          testID="reader-bottom-bar"
+          style={[
+            styles.bottomBar,
+            { backgroundColor: surface.surface, borderTopColor: surface.border },
+          ]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Previous chapter"
+            disabled={!adjacent.prev}
+            onPress={() =>
+              adjacent.prev &&
+              router.replace({
+                pathname: '/reader/[chapterId]',
+                params: { chapterId: String(adjacent.prev.id) },
+              })
+            }
+            hitSlop={8}
+            style={[styles.bottomNavBtn, !adjacent.prev && styles.bottomNavDisabled]}
+          >
+            <ChevronLeft size={18} color={surface.fg} strokeWidth={1.8} />
+            <ThemedText variant="caption" style={{ color: surface.fg }}>
+              Prev
+            </ThemedText>
+          </Pressable>
+
+          <View style={styles.bottomCenter}>
+            <ThemedText variant="mono" style={{ color: surface.fg }}>
+              {chapter ? `Ch. ${chapter.chapter_number}` : ''} · {progressPct}%
+            </ThemedText>
+          </View>
+
+          <View style={styles.bottomRight}>
+            <Pressable
+              testID="reader-voice-quick-btn"
+              accessibilityRole="button"
+              accessibilityLabel="Open voice and reading speed settings"
+              onPress={() => setSettingsOpen(true)}
+              hitSlop={6}
+              style={[styles.voiceQuickPill, { borderColor: surface.border }]}
+            >
+              <Volume2 size={14} color={surface.muted} strokeWidth={1.8} />
+              <ThemedText variant="mono" style={{ color: surface.muted }}>
+                {readerPrefs.ttsRate.toFixed(2).replace(/\.00$/, '.0')}x
+              </ThemedText>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next chapter"
+              disabled={!adjacent.next}
+              onPress={() =>
+                adjacent.next &&
+                router.replace({
+                  pathname: '/reader/[chapterId]',
+                  params: { chapterId: String(adjacent.next.id) },
+                })
+              }
+              hitSlop={8}
+              style={[styles.bottomNavBtn, !adjacent.next && styles.bottomNavDisabled]}
+            >
+              <ThemedText variant="caption" style={{ color: surface.fg }}>
+                Next
+              </ThemedText>
+              <ChevronRight size={18} color={surface.fg} strokeWidth={1.8} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {/* Docked TTS audio bar: ONLY renders when toggled ON in settings, cleanly BELOW scroll viewport! */}
       {ttsState.enabled ? (
         <TtsDockedBar
@@ -514,7 +596,7 @@ export default function ReaderScreen() {
           onPrev={() => ttsRef.current?.prevParagraph()}
           onNext={() => ttsRef.current?.nextParagraph()}
           onCycleRate={() => {
-            const idx = TTS_RATES.indexOf(ttsState.rate);
+            const idx = TTS_RATES.findIndex((r) => Math.abs(r - ttsState.rate) < 0.02);
             const nextRate = TTS_RATES[(idx + 1) % TTS_RATES.length];
             ttsRef.current?.setRate(nextRate);
             void updateReaderPrefs({ ttsRate: nextRate });
@@ -638,6 +720,43 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     paddingVertical: spacing.smd,
     borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  bottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderTopWidth: 1,
+    gap: spacing.sm,
+  },
+  bottomNavBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+  },
+  bottomNavDisabled: {
+    opacity: 0.3,
+  },
+  bottomCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  bottomRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  voiceQuickPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.full,
     borderWidth: 1,
   },
 });

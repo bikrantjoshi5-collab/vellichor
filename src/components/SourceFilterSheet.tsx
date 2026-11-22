@@ -26,9 +26,10 @@ export interface SourceFilterSheetProps {
   visible: boolean;
   sourceName: string;
   filters: PluginFilters;
-  showLatestNovels: boolean;
+  showLatestNovels?: boolean;
+  hideLatestToggle?: boolean;
   onChangeFilters: (next: PluginFilters) => void;
-  onChangeShowLatest: (next: boolean) => void;
+  onChangeShowLatest?: (next: boolean) => void;
   onReset: () => void;
   onApply: () => void;
   onClose: () => void;
@@ -38,7 +39,8 @@ export function SourceFilterSheet({
   visible,
   sourceName,
   filters,
-  showLatestNovels,
+  showLatestNovels = false,
+  hideLatestToggle = false,
   onChangeFilters,
   onChangeShowLatest,
   onReset,
@@ -278,22 +280,24 @@ export function SourceFilterSheet({
             contentContainerStyle={styles.body}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <ThemedText variant="cardTitle">Sort by Latest Updates</ThemedText>
-                <ThemedText variant="caption">Switch between Popular catalog and Latest releases</ThemedText>
+            {!hideLatestToggle && onChangeShowLatest ? (
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText variant="cardTitle">Sort by Latest Updates</ThemedText>
+                  <ThemedText variant="caption">Switch between Popular catalog and Latest releases</ThemedText>
+                </View>
+                <Switch
+                  value={showLatestNovels}
+                  onValueChange={onChangeShowLatest}
+                  trackColor={{ false: mossColors.surfaceElevated, true: mossColors.good }}
+                  thumbColor={mossColors.fg}
+                />
               </View>
-              <Switch
-                value={showLatestNovels}
-                onValueChange={onChangeShowLatest}
-                trackColor={{ false: mossColors.surfaceElevated, true: mossColors.good }}
-                thumbColor={mossColors.fg}
-              />
-            </View>
+            ) : null}
 
             {entries.length === 0 ? (
               <ThemedText variant="subhead" style={styles.emptyNote}>
-                This source only supports Popular / Latest sorting and keyword search.
+                This source does not expose extra manual filters beyond Popular, Latest, and keyword search.
               </ThemedText>
             ) : (
               entries.map(([key, item]) => renderFilterControl(key, item))

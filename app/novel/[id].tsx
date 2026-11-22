@@ -9,10 +9,11 @@ import {
   CheckCircle2,
   Download,
   Link2,
+  Plus,
   RefreshCw,
   Trash2,
 } from 'lucide-react-native';
-import { mossColors, radius, spacing } from '@/theme';
+import { labelPalette, mossColors, radius, spacing, type LabelColorToken } from '@/theme';
 import { useAppStore } from '@/store/appStore';
 import { libraryRepo } from '@/db/repositories/libraryRepo';
 import { chapterRepo } from '@/db/repositories/chapterRepo';
@@ -27,6 +28,7 @@ import { Button } from '@/components/Button';
 import { Chip } from '@/components/Chip';
 import { NovelCover } from '@/components/NovelCover';
 import { TrackerModalSheet } from '@/components/TrackerModalSheet';
+import { LabelManagerSheet } from '@/components/LabelManagerSheet';
 
 const STATUSES: Array<{ id: ReadingStatus; label: string }> = [
   { id: 'reading', label: 'Reading' },
@@ -47,6 +49,9 @@ export default function NovelDetailScreen() {
   const downloadJobs = useAppStore((s) => s.downloadJobs);
   const refreshLibrary = useAppStore((s) => s.refreshLibrary);
   const enqueueDownloads = useAppStore((s) => s.enqueueDownloads);
+  const createShelf = useAppStore((s) => s.createShelf);
+  const deleteShelf = useAppStore((s) => s.deleteShelf);
+  const toggleNovelLabel = useAppStore((s) => s.toggleNovelLabel);
 
   const [novel, setNovel] = useState<NovelRow | null>(null);
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
@@ -54,6 +59,7 @@ export default function NovelDetailScreen() {
   const [trackers, setTrackers] = useState<TrackerLinkRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [trackerOpen, setTrackerOpen] = useState(false);
+  const [labelSheetOpen, setLabelSheetOpen] = useState(false);
   const [descOrder, setDescOrder] = useState(false);
 
   const loadData = useCallback(async () => {
@@ -221,28 +227,36 @@ export default function NovelDetailScreen() {
               ))}
             </ScrollView>
 
-            {/* Custom Shelves (many-to-many, separate from reading status) */}
-            {allShelves.length > 0 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-                {allShelves.map((s) => {
-                  const has = assignedShelves.some((a) => a.id === s.id);
-                  return (
-                    <Chip
-                      key={s.id}
-                      label={s.name}
-                      active={has}
-                      onPress={async () => {
-                        if (!db) return;
-                        if (has) await libraryRepo.removeNovelFromShelf(db, novel.id, s.id);
-                        else await libraryRepo.assignNovelToShelf(db, novel.id, s.id);
-                        await loadData();
-                        await refreshLibrary();
-                      }}
-                    />
-                  );
-                })}
-              </ScrollView>
-            ) : null}
+            {/* Custom Labels (many-to-many, separate from reading status) */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              {allShelves.map((s) => {
+                const has = assignedShelves.some((a) => a.id === s.id);
+                const tok =
+                  labelPalette[(s.color_token as LabelColorToken) ?? 'terracotta'] ??
+                  labelPalette.terracotta;
+                return (
+                  <Chip
+                    key={s.id}
+                    label={s.name}
+                    dotColor={tok.dot}
+                    active={has}
+                    onPress={async () => {
+                      await toggleNovelLabel(novel.id, s.id);
+                      await loadData();
+                    }}
+                  />
+                );
+              })}
+              <Pressable
+                onPress={() => setLabelSheetOpen(true)}
+                style={styles.addLabelPill}
+              >
+                <Plus size={13} color={mossColors.accent} strokeWidth={2.2} />
+                <ThemedText variant="caption" style={{ color: mossColors.accent }}>
+                  Label
+                </ThemedText>
+              </Pressable>
+            </ScrollView>
 
             {/* Bulk Download Strip */}
             <View style={styles.bulkBox}>
@@ -367,6 +381,23 @@ export default function NovelDetailScreen() {
           await loadData();
         }}
       />
+
+      <LabelManagerSheet
+        visible={labelSheetOpen}
+        labels={allShelves}
+        targetNovel={{
+          id: novel.id,
+          title: novel.title,
+          assignedIds: assignedShelves.map((s) => s.id),
+        }}
+        onCreateLabel={createShelf}
+        onDeleteLabel={deleteShelf}
+        onToggleNovelLabel={async (nId, labelId) => {
+          await toggleNovelLabel(nId, labelId);
+          await loadData();
+        }}
+        onClose={() => setLabelSheetOpen(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -426,6 +457,18 @@ const styles = StyleSheet.create({
   },
   chipRow: {
     gap: spacing.sm,
+    alignItems: 'center',
+  },
+  addLabelPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: spacing.xs + 3,
+    paddingHorizontal: spacing.smd,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: mossColors.border,
+    backgroundColor: mossColors.surface,
   },
   bulkBox: {
     padding: spacing.smd,

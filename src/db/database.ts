@@ -3,8 +3,21 @@ import type { SqlExecutor, SqlParam } from './types';
 
 let appDbPromise: Promise<SqlExecutor> | null = null;
 
+async function ensureColumn(db: SqlExecutor, table: string, column: string, definition: string): Promise<void> {
+  const cols = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (!cols.some((c) => c.name === column)) {
+    await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 export async function initDatabase(db: SqlExecutor): Promise<void> {
   await db.execAsync(SCHEMA_SQL);
+  // Safe additive migrations for existing on-device databases
+  await ensureColumn(db, 'shelves', 'color_token', "TEXT NOT NULL DEFAULT 'terracotta'");
+  await ensureColumn(db, 'plugins', 'installed_manifest_hash', 'TEXT');
+  await ensureColumn(db, 'plugins', 'installed_etag', 'TEXT');
+  await ensureColumn(db, 'plugins', 'remote_etag', 'TEXT');
+  await ensureColumn(db, 'tracker_links', 'pending_chapter', 'REAL');
 }
 
 export async function getSetting(db: SqlExecutor, key: string): Promise<string | null> {

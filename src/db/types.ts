@@ -73,6 +73,7 @@ export interface NovelWithStats extends NovelRow {
 export interface ShelfRow {
   id: number;
   name: string;
+  color_token: string;
   sort_order: number;
   created_at: number;
 }
