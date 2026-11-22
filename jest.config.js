@@ -6,11 +6,15 @@ module.exports = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1'
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(?:.+/)?(?:htmlparser2|domhandler|domutils|dom-serializer|domelementtype|entities|cheerio|cheerio-select|css-select|css-what|nth-check|boolbase)/)'
+  ],
   transform: {
-    '^.+\\.tsx?$': [
+    '^.+\\.[tj]sx?$': [
       'ts-jest',
       {
         tsconfig: {
+          allowJs: true,
           module: 'commonjs',
           moduleResolution: 'node',
           esModuleInterop: true,
