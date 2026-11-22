@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Vellichor",
+    "slug": "vellichor",
+    "version": "1.0.0",
+    "scheme": "vellichor",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F1715",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.personal.vellichor",
+      "adaptiveIcon": {
+        "backgroundColor": "#0F1715"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_DATA_SYNC",
+        "POST_NOTIFICATIONS",
+        "WAKE_LOCK"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-font",
+      "expo-secure-store",
+      "expo-notifications",
+      "expo-background-task"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
