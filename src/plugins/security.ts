@@ -90,7 +90,7 @@ export function assertSafeExternalUrl(
 
 async function digestHex(algorithm: 'SHA-256' | 'SHA-1' | 'MD5', text: string): Promise<string> {
   try {
-    // React Native / Expo native crypto
+    // React Native / Expo native crypto (handles SHA-256, SHA-1, and MD5 natively on Android)
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ExpoCrypto = require('expo-crypto') as typeof import('expo-crypto');
     const algMap: Record<'SHA-256' | 'SHA-1' | 'MD5', import('expo-crypto').CryptoDigestAlgorithm> = {
@@ -102,13 +102,19 @@ async function digestHex(algorithm: 'SHA-256' | 'SHA-1' | 'MD5', text: string): 
       return (await ExpoCrypto.digestStringAsync(algMap[algorithm], text)).toLowerCase();
     }
   } catch {
-    // Fall through to Node crypto in Jest / Node environments
+    // Fall through to standard Web Crypto API in Node / Jest environments (Metro-safe, no Node built-ins)
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeCrypto = require('crypto') as typeof import('crypto');
-  const nodeAlg = algorithm === 'SHA-256' ? 'sha256' : algorithm === 'SHA-1' ? 'sha1' : 'md5';
-  return nodeCrypto.createHash(nodeAlg).update(text, 'utf8').digest('hex').toLowerCase();
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle && (algorithm === 'SHA-256' || algorithm === 'SHA-1')) {
+    const bytes = new TextEncoder().encode(text);
+    const buf = await subtle.digest(algorithm, bytes);
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  throw new Error(`Unsupported digest algorithm "${algorithm}" in current runtime`);
 }
 
 /**
